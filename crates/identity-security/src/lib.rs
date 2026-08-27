@@ -8,12 +8,14 @@
 
 mod pan;
 mod redacted;
+mod secret;
 
 pub mod crypto;
 
 pub use crypto::{CipherError, EncryptedIdentityEnvelope, IdentityCipher, IdentityKey};
 pub use pan::{MaskedPan, Pan, PanError};
 pub use redacted::Redacted;
+pub use secret::{IdentitySecret, IdentitySecretError};
 
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +95,23 @@ impl SensitiveIdentityRecord {
         })
     }
 
+    /// Build a record from the full identity payload (PAN + optional UPI).
+    /// The payload is serialized to JSON and encrypted; only ciphertext remains.
+    pub fn encrypt_identity(
+        secret: IdentitySecret,
+        account_id: impl Into<String>,
+        cipher: &IdentityCipher,
+        key_id: impl Into<String>,
+    ) -> Result<Self, CipherError> {
+        let masked = secret.pan.mask();
+        let envelope = cipher.encrypt(secret.to_json().as_bytes(), key_id)?;
+        Ok(Self {
+            account_id: account_id.into(),
+            masked_pan: masked,
+            envelope,
+        })
+    }
+
     pub fn account_id(&self) -> &str {
         &self.account_id
     }
@@ -128,6 +147,8 @@ pub enum AccessError {
     Cipher(#[from] CipherError),
     #[error("no key available for key id {0}")]
     MissingKey(String),
+    #[error("identity payload is invalid")]
+    Payload,
 }
 
 /// Purpose-scoped sensitive access.
@@ -148,6 +169,7 @@ impl SensitiveIdentityService {
     }
 
     /// Decrypt the record's PAN only for the duration of `f`, then drop it.
+    /// Works with both raw-PAN envelopes (Phase 2A) and JSON identity payloads.
     pub fn with_pan<F, R>(
         &mut self,
         record: &SensitiveIdentityRecord,
@@ -158,6 +180,34 @@ impl SensitiveIdentityService {
     where
         F: FnOnce(&str) -> R,
     {
+        let plaintext = self.decrypt_authorized(record, purpose, actor_account_id)?;
+        let secret = decode_payload(&plaintext)?;
+        Ok(f(secret.pan.as_normalized()))
+    }
+
+    /// Decrypt the full identity payload (PAN + UPI) for the duration of `f`.
+    pub fn with_identity<F, R>(
+        &mut self,
+        record: &SensitiveIdentityRecord,
+        purpose: SensitivePurpose,
+        actor_account_id: &str,
+        f: F,
+    ) -> Result<R, AccessError>
+    where
+        F: FnOnce(&IdentitySecret) -> R,
+    {
+        let plaintext = self.decrypt_authorized(record, purpose, actor_account_id)?;
+        let secret = decode_payload(&plaintext)?;
+        Ok(f(&secret))
+    }
+
+    /// Shared authorize → resolve key → decrypt path with audit emission.
+    fn decrypt_authorized(
+        &mut self,
+        record: &SensitiveIdentityRecord,
+        purpose: SensitivePurpose,
+        actor_account_id: &str,
+    ) -> Result<Vec<u8>, AccessError> {
         let purpose_str = match purpose {
             SensitivePurpose::AllotmentCheck => "ALLOTMENT_CHECK",
             SensitivePurpose::Unknown => {
@@ -172,7 +222,6 @@ impl SensitiveIdentityService {
             .ok_or_else(|| AccessError::MissingKey(key_id.to_owned()))?;
         let decrypt_cipher = IdentityCipher::new(key);
         let plaintext = decrypt_cipher.decrypt(record.envelope())?;
-        let pan = std::str::from_utf8(&plaintext).unwrap_or_default();
 
         self.last_audit = Some(SensitiveAccessAudit {
             account_id: actor_account_id.to_owned(),
@@ -180,13 +229,27 @@ impl SensitiveIdentityService {
             occurred_at: now_rfc3339(),
         });
 
-        Ok(f(pan))
+        Ok(plaintext)
     }
 
     /// The audit record for the most recent access, for the caller to persist.
     pub fn take_last_audit(&mut self) -> Option<SensitiveAccessAudit> {
         self.last_audit.take()
     }
+}
+
+/// Decode a decrypted payload into an [`IdentitySecret`].
+///
+/// Supports both envelope formats: Phase 2A raw-PAN bytes and Phase 2B JSON
+/// payloads. JSON is tried first; anything that is not valid JSON falls back to
+/// raw-PAN interpretation. Invalid PAN content fails closed.
+fn decode_payload(plaintext: &[u8]) -> Result<IdentitySecret, AccessError> {
+    let text = std::str::from_utf8(plaintext).map_err(|_| AccessError::Payload)?;
+    if let Ok(secret) = IdentitySecret::from_json(text) {
+        return Ok(secret);
+    }
+    let pan = Pan::parse(text).map_err(|_| AccessError::Payload)?;
+    Ok(IdentitySecret { pan, upi_id: None })
 }
 
 fn now_rfc3339() -> String {

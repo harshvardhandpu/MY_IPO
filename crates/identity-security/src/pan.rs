@@ -76,6 +76,20 @@ impl MaskedPan {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Build a masked PAN directly from its visible parts (first five letters,
+    /// last letter). Used when the full PAN never enters this process (e.g.
+    /// profile records that only ever store the masked form).
+    pub fn from_parts(first_five: &str, last: &str) -> Self {
+        let valid = first_five.len() == 5
+            && first_five.bytes().all(|b| b.is_ascii_uppercase())
+            && last.len() == 1
+            && last.bytes().next().is_some_and(|b| b.is_ascii_uppercase());
+        if !valid {
+            return MaskedPan("[REDACTED]".to_owned());
+        }
+        MaskedPan(format!("{first_five}****{last}"))
+    }
 }
 
 // Never reveal the full PAN in any display or debug path.
