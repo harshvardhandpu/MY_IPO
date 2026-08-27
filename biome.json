@@ -4,8 +4,8 @@
     "includes": [
       "**",
       "!!node_modules",
-      "!!target",
-      "!!dist",
+      "!!**/target/**",
+      "!!**/dist/**",
       "!!apps/desktop/src-tauri/gen/**",
       "!!docs/planning/SANKET_IPO_MASTER_SOURCE*.md"
     ]

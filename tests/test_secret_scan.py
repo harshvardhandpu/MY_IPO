@@ -34,6 +34,20 @@ class SecretScannerTests(unittest.TestCase):
 
             self.assertEqual([FindingKind.API_KEY], [item.kind for item in findings])
 
+    def test_allows_synthetic_pan_only_in_test_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            generated_pan = "TESTP" + "1234" + "Z"
+
+            test_file = Path(directory) / "tests" / "fixture.rs"
+            test_file.parent.mkdir(exist_ok=True)
+            test_file.write_text(generated_pan, encoding="utf-8")
+
+            prod_file = Path(directory) / "domain.rs"
+            prod_file.write_text(generated_pan, encoding="utf-8")
+
+            self.assertEqual([], scan_paths([test_file]))
+            self.assertEqual([FindingKind.PAN], [f.kind for f in scan_paths([prod_file])])
+
 
 if __name__ == "__main__":
     unittest.main()

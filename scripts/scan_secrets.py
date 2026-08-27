@@ -18,6 +18,11 @@ API_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Test fixtures must use format-valid synthetic PANs (five letters, four digits,
+# one letter) to exercise validation/masking/redaction. These are NOT real PANs.
+# We allow that narrowly inside test paths only; every other path fails closed.
+_TEST_PATH_MARKERS = ("/tests/", "tests/", "_test.rs", ".test.")
+
 
 class FindingKind(str, Enum):
     PAN = "PAN"
@@ -32,13 +37,19 @@ class Finding:
 
 
 def _scan_text(path: Path, text: str) -> list[Finding]:
+    skip_pan = _is_test_path(path)
     findings: list[Finding] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if PAN_PATTERN.search(line):
+        if not skip_pan and PAN_PATTERN.search(line):
             findings.append(Finding(path=path, line=line_number, kind=FindingKind.PAN))
         if API_KEY_PATTERN.search(line):
             findings.append(Finding(path=path, line=line_number, kind=FindingKind.API_KEY))
     return findings
+
+
+def _is_test_path(path: Path) -> bool:
+    s = path.as_posix()
+    return any(marker in s for marker in _TEST_PATH_MARKERS)
 
 
 def scan_paths(paths: Iterable[Path]) -> list[Finding]:
