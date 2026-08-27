@@ -1,0 +1,51 @@
+# JavaScript
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Rust
+/target/
+**/target/
+
+# Tauri bundles and generated state
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
+
+# Local application data (never commit)
+.local/
+*.sqlite
+*.sqlite3
+*.db
+MemberVault/
+IntelligenceVault/
+*.enc
+*.age
+*.key
+*.pem
+*.p12
+*.pfx
+*.secrets*
+.env
+.env.*
+!.env.example
+
+# Proofs / private blobs
+_secure_identity/
+_secure_blobs/
+proofs/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*
