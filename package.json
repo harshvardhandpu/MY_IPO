@@ -1,0 +1,30 @@
+{
+  "name": "sanket-ipo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/desktop",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.22.2",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace @sanket/desktop",
+    "build": "npm run build --workspace @sanket/desktop",
+    "test": "npm run test --workspace @sanket/desktop && python -m unittest discover -s tests -v",
+    "typecheck": "npm run typecheck --workspace @sanket/desktop",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "secrets": "python scripts/scan_secrets.py",
+    "check": "npm run secrets && npm run format:check && npm run typecheck && npm run test",
+    "tauri": "npm run tauri --workspace @sanket/desktop --",
+    "tauri:dev": "npm run tauri --workspace @sanket/desktop -- dev",
+    "tauri:build": "npm run tauri --workspace @sanket/desktop -- build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10"
+  }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "sanket-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sanket_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "sanket-ipo"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+sanket-device-settings = { path = "../../../crates/device-settings" }
+sanket-domain = { path = "../../../crates/domain" }
+sanket-local-index = { path = "../../../crates/local-index" }
+serde.workspace = true
+tauri = { version = "2.11.5", features = [] }
