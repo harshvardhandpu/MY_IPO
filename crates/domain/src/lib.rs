@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod members;
+mod money;
+
+pub use members::{CoreMember, FriendAccount, FriendShareError, MemberStatus};
+pub use money::{BasisPoints, BasisPointsError, Money};
+
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,9 +37,28 @@ pub enum SyncStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventPayload {
-    DeviceRegistered { device_label: String },
-    SettingsInitialized { settings_version: u16 },
-    SensitiveIdentityAccessed { account_id: String, purpose: String },
+    DeviceRegistered {
+        device_label: String,
+    },
+    SettingsInitialized {
+        settings_version: u16,
+    },
+    SensitiveIdentityAccessed {
+        account_id: String,
+        purpose: String,
+    },
+    /// Member-wide notification: a friend account was added. Carries no PAN.
+    FriendAccountAdded {
+        friend_id: String,
+        owner_member_id: String,
+        label: String,
+        share_basis_points: i64,
+    },
+    /// Member-wide notification: a friend account was archived (never deleted).
+    FriendAccountArchived {
+        friend_id: String,
+        owner_member_id: String,
+    },
 }
 
 impl EventPayload {
@@ -42,6 +67,8 @@ impl EventPayload {
             Self::DeviceRegistered { .. } => "DEVICE_REGISTERED",
             Self::SettingsInitialized { .. } => "SETTINGS_INITIALIZED",
             Self::SensitiveIdentityAccessed { .. } => "SENSITIVE_IDENTITY_ACCESSED",
+            Self::FriendAccountAdded { .. } => "FRIEND_ACCOUNT_ADDED",
+            Self::FriendAccountArchived { .. } => "FRIEND_ACCOUNT_ARCHIVED",
         }
     }
 }
