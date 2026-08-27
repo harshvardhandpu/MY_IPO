@@ -233,6 +233,11 @@ impl EventEnvelope {
         &self.content_hash
     }
 
+    /// The event payload, for projection/replay.
+    pub fn payload(&self) -> &EventPayload {
+        &self.payload
+    }
+
     pub fn verify_integrity(&self) -> Result<bool, EventError> {
         Ok(self.content_hash == self.calculate_hash()?)
     }

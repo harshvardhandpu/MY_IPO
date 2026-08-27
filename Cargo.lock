@@ -2808,8 +2808,10 @@ name = "sanket-local-index"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "sanket-domain",
  "tempfile",
  "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
