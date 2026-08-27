@@ -5,6 +5,7 @@ members = [
   "crates/domain",
   "crates/device-settings",
   "crates/intelligence-vault",
+  "crates/identity-security",
   "crates/local-index",
   "crates/member-vault",
   "crates/sync-engine",
@@ -25,3 +26,7 @@ sha2 = "0.10"
 thiserror = "2.0"
 time = { version = "0.3.55", features = ["formatting", "parsing", "serde"] }
 uuid = { version = "1.26.0", features = ["serde", "v7"] }
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+rand = "0.8"
+subtle = "2.6"
+zeroize = { version = "1.8", features = ["derive"] }
