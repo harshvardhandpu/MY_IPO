@@ -6,7 +6,7 @@ All IDs are opaque UUIDv7/ULID-style stable identifiers. Money is integer paise;
 
 - `CoreMember`: id, display name, role, primary account id, sensitive record id, masked PAN, consent metadata, status.
 - `FriendAccount`: id, owner member id, display label, sensitive record id, masked PAN, broker metadata, share eligibility/basis points, status.
-- `SensitiveIdentityEnvelope`: envelope version, key id, nonce, ciphertext, authenticated metadata. Full PAN exists only inside ciphertext.
+- `SensitiveIdentityEnvelope`: envelope version, key id, nonce, ciphertext, authenticated metadata. Full PAN exists only inside ciphertext. Persisted at `MemberVault/_secure_identity/<member-id>.enc` and `MemberVault/_secure_identity/friends/<friend-id>.enc` (atomic owner-only writes). See `docs/architecture/SENSITIVE_IDENTITY.md`.
 - `Device`: id, member id, public key, status, created/revoked timestamps.
 
 ## Investments

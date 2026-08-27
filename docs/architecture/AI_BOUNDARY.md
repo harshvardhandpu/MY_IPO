@@ -17,6 +17,8 @@ PAN, UPI IDs, names, emails, phone numbers, proof bytes/paths, private member/ac
 - Strategy Lab and News/Report services are constructed only with `IntelligenceVault`.
 - CI dependency checks reject forbidden crate edges.
 
+Phase 2A status: `InvestmentDecisionPayload` is implemented in `sanket-intelligence-vault` with a fail-closed `assert_safe()` validator that rejects PAN-like and UPI-like tokens in any string field. `Pan` does not implement `Serialize`, so private identity types cannot be serialized into AI payloads at compile time. Adversarial tests live in `crates/intelligence-vault/tests/ai_boundary.rs`.
+
 ## Sanitized decision contract
 
 ```json

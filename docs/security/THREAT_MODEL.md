@@ -37,6 +37,8 @@ Full PAN, UPI IDs, member/friend identity mapping, allocations, proofs, profits,
 - Telemetry is off by default.
 - Local accounting never depends on AI or registrar availability.
 
+Phase 2A regression coverage: `crates/member-vault/tests/security_invariant.rs` proves end-to-end that after persisting an encrypted identity, no plaintext PAN appears in any persisted file, audit record, AI payload, or envelope serialization. `crates/identity-security/tests/logging.rs` proves validation errors never echo input.
+
 ## Accepted limitation
 
 A trusted member with privileged control of an enrolled device can potentially extract credentials/data available to that device. A zero-server local-first design mitigates accidental and remote exposure but cannot defeat the authorized endpoint owner.

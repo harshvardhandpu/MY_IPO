@@ -1,64 +1,97 @@
 # Current State
 
-- **Branch:** `feature/foundation`
-- **Latest implementation commit:** `798a420` (`feat(foundation): add runnable Tauri desktop core`)
-- **Phase:** Phase 0 and Phase 1 complete; Phase 2A sensitive identity is next
+- **Branch:** `feature/sensitive-identity`
+- **Base:** `83811b3` (`docs(handoff): record completed foundation milestone`) on `feature/foundation`
+- **Phase:** Phase 2A (Sensitive Identity Security) complete; Phase 2B (CoreMember/FriendAccount onboarding) is next
 
-## Completed
+## Completed — Phase 2A
 
-- Canonicalized the supplied v2 master source at `docs/planning/SANKET_IPO_MASTER_SOURCE.md`.
-- Added repository ignore rules, local pre-commit secret scanning, Gitleaks configuration, Dependabot, and Linux/Windows CI.
-- Added all required baseline architecture, data, event, sync, security, allotment, profit, UI, plan, and handoff documents.
-- Added a Tauri 2 desktop shell with React, TypeScript 7, Vite, accessible navigation, dashboard hierarchy, and prominent Invest / Check Allotment actions.
-- Added a Cargo workspace with domain, device settings, local index, member vault, intelligence vault, sync, audit, and Tauri adapter boundaries.
-- Added stable device settings using atomic owner-only JSON persistence.
-- Added embedded SQLite schema v1 with WAL, foreign keys, busy timeout, and owner-only Unix file permissions.
-- Added schema-versioned, SHA-256-sealed event envelopes, stable role/sync-state serialization, and sensitive-access audit events that never accept the secret value.
-- Added least-privilege Tauri capability configuration and a narrow `get_app_status` command.
-- Completed a real Linux desktop smoke launch; the rendered shell, application data creation, migration version, and file permissions were verified.
+### New crate: `sanket-identity-security`
+- `Pan` domain type: format validation (5 letters + 4 digits + 1 letter), case/whitespace normalization, `ABCDE****F` masking. No `Serialize` impl (compile-time leak prevention). `Display`/`Debug` render only masked/redacted forms.
+- `MaskedPan`: safe serializable display type.
+- `Redacted<T>`: generic zeroize-on-drop wrapper; `Display`/`Debug` always render `[REDACTED]`.
+- `IdentityKey`: 32-byte key, zeroized on drop, explicit construction.
+- `IdentityCipher`: XChaCha20-Poly1305 AEAD (chacha20poly1305 crate), random 24-byte nonce per encryption.
+- `EncryptedIdentityEnvelope`: versioned (v1), algorithm-tagged, key-id-referenced, serde-serializable ciphertext-only struct.
+- `KeyProvider` trait + `InMemoryKeyProvider` (dev/test). OS keyring providers abstracted, deferred to packaging.
+- `SensitiveIdentityRecord`: holds only masked PAN + encrypted envelope; no plaintext field.
+- `SensitivePurpose` enum: `AllotmentCheck` authorized; `Unknown` rejected before decryption.
+- `SensitiveIdentityService::with_pan(record, purpose, actor, closure)`: transient decrypt → closure → drop → audit. No long-lived PAN escape.
+- `SensitiveAccessAudit`: account_id + purpose + timestamp only; structurally cannot contain PAN.
 
-## Tests and checks
+### MemberVault encrypted persistence
+- `MemberVault::store_member_identity` / `store_friend_identity`: atomic writes (temp + fsync + rename), owner-only `0600` on Unix.
+- Deterministic layout: `_secure_identity/<member-id>.enc`, `_secure_identity/friends/<friend-id>.enc`.
+- Path-traversal rejection on ids. Envelope version validation on load. Malformed JSON fails safely.
+- `append_event` for audit event persistence.
 
-Passed on the Linux development host:
+### AI boundary hardening
+- `InvestmentDecisionPayload` in `sanket-intelligence-vault`: sanitized scalar fields only, fail-closed `assert_safe()` rejecting PAN-like and UPI-like tokens.
+- Adversarial tests prove PAN/UPI tokens rejected; private field names structurally absent.
 
-- `npm run check` — secret scan, Biome formatting, TypeScript, 2 frontend tests, and 3 Python scanner tests.
-- `npm run build` — Vite production bundle generated successfully.
-- `cargo fmt --all -- --check` — run after formatting changes.
-- `cargo clippy --workspace --all-targets -- -D warnings` — no warnings.
-- `cargo test --workspace` — 9 Rust behavior/integration tests passed.
-- Manual smoke — Tauri process launched, Vite served, native window rendered, SQLite migration returned version `1`, and settings/database files were mode `0600`.
+### Logging security
+- Validation errors are static descriptions; never echo input.
+- `Redacted` renders identically regardless of wrapped value.
+- Masked PAN contains zero interior digits.
 
-## Security state
+### Secret scanner expansion
+- Test-path allowlist for synthetic PAN fixtures (narrow: only `tests/` paths).
+- Non-test paths still fail closed on any format-valid PAN.
+- New test proves the allowlist boundary.
 
-- No real PAN, UPI ID, proof, API key, or member data was used.
-- The repository scanner and pre-commit hook are active through `core.hooksPath=.githooks`.
-- Tauri exposes only `core:default`; there is no shell or arbitrary filesystem capability.
-- MemberVault and IntelligenceVault are separate Rust capabilities with no AI dependency edge.
-- SQLite and device settings are owner-only on Unix. Windows ACL hardening remains required before sensitive projections are introduced.
+### Security invariant regression test
+- `crates/member-vault/tests/security_invariant.rs`: full lifecycle — encrypt → persist → purpose-scoped access → audit → walk all persisted files → assert no plaintext PAN anywhere. Permanent regression.
+
+## Tests and checks (all passing)
+
+- `cargo test --workspace`: **50 Rust tests** (up from 9 at Phase 1).
+  - identity-security: 27 (4 unit + 19 security + 4 logging)
+  - member-vault: 8 (7 persistence + 1 security invariant)
+  - intelligence-vault: 6 (AI boundary)
+  - foundation crates: 9 (unchanged)
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `npm run check`: secret scan (77 files), Biome format, TypeScript, 2 frontend tests, 4 Python scanner tests — all pass.
+- `npm run build`: Vite production bundle OK.
+
+## Security invariants proven by tests
+
+1. Encrypted identity round-trip works; wrong key/corrupted ciphertext/tampered nonce all fail authentication.
+2. PAN masking: `ABCDE****F`; no interior digits; Debug/Display redacted.
+3. Purpose-scoped access: `AllotmentCheck` works; `Unknown` rejected before decryption.
+4. Audit contains account_id + purpose + time; never PAN.
+5. AI payload cannot carry PAN/UPI (compile-time + runtime fail-closed).
+6. Validation errors never echo input.
+7. Persisted files contain no plaintext PAN (byte-level walk).
+8. Secret scanner catches PAN leakage in non-test paths.
+
+## Deferred (documented, not mocked)
+
+| Item | Status |
+|---|---|
+| Windows Credential Manager KeyProvider | ABSTRACTED (trait ready); DEFERRED to packaging |
+| Linux Secret Service KeyProvider | ABSTRACTED (trait ready); DEFERRED to packaging |
+| Windows ACL hardening for vault dir | DEFERRED to packaging |
+| Key rotation tooling | Envelope design supports it; no rotation command yet |
 
 ## Known limitations
 
-- Dashboard values and charts are empty-state shell content; accounting persistence is not implemented yet.
-- Invest and Check Allotment buttons are present but do not yet open workflows.
-- Sync is currently a contract/status model only; no Git transport is running.
-- CI is configured for Windows and Linux but has not run remotely until the branch is pushed.
-- Sensitive identity encryption, OS credential storage, proof encryption, registrar workers, and AI DTOs are intentionally deferred to their planned phases.
+- Dashboard UI unchanged; no member/friend creation UI yet (Phase 2B).
+- `SensitiveIdentityService` audit is in-memory until wired to event persistence (Phase 2B wiring).
+- No OS keyring integration yet; dev/test uses `InMemoryKeyProvider` only.
 
-## Important architecture decisions
+## Next exact tasks — Phase 2B
 
-- Tauri modular monolith; no network microservices.
-- Local event persistence is the write success boundary; SQLite and Git sync are derived/asynchronous.
-- Money will use integer paise; percentages will use integer basis points.
-- Private, sensitive-automation, and public/AI domains remain structurally disjoint.
-- Durable event payloads are allowlisted Rust enums rather than arbitrary JSON at the command boundary.
-
-## Next exact tasks — Phase 2A
-
-1. Add the crypto crate and key-provider abstraction without committing keys.
-2. Add mandatory PAN validation, masking, redacted secret handling, and generated synthetic fixtures.
-3. Add encrypted member/friend identity envelopes and purpose-scoped `with_pan` access.
-4. Add MemberVault encrypted-record persistence and audit-on-access integration.
-5. Add adversarial tests proving PAN/UPI/proofs/private member objects cannot enter AI request DTOs or logs.
+1. `CoreMember` domain type: id, display name, role, primary account id, sensitive record ref, masked PAN, consent metadata, status.
+2. `FriendAccount` domain type: id, owner member id, label, sensitive record ref, masked PAN, broker, share eligibility/basis points, status.
+3. Member onboarding flow: PAN mandatory, validation, encryption, persistence, masked display.
+4. Friend account creation: PAN mandatory for investable friends, 10% default share eligibility.
+5. Primary account designation.
+6. UPI fields (encrypted or masked; not in AI payloads).
+7. Archive-not-delete for friends.
+8. Member-wide notification event on friend add/archive.
+9. Deterministic accounting objects (paise/basis points).
+10. Wire `SensitiveAccessAudit` to MemberVault event persistence.
 
 ## Commands
 
