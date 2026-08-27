@@ -34,6 +34,74 @@ pub struct InvestmentDecisionPayload {
     pub public_context_hashes: Vec<String>,
 }
 
+/// A single planned IPO within a decision request (master-source §78.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedIpo {
+    pub typed_name: String,
+    pub planned_amount_per_account_paise: i64,
+}
+
+/// The multi-IPO sanitized decision request (master-source §78.2).
+///
+/// Field set is fixed to approved keys only: session id, declared daily capital
+/// (paise), account count, per-IPO typed name + planned amount, and an algorithm
+/// version. No identity, PAN, UPI, name, email, proof, or path is representable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestmentDecisionRequest {
+    pub session_id: String,
+    pub declared_daily_capital_paise: i64,
+    pub account_count: u32,
+    pub ipos: Vec<PlannedIpo>,
+    pub algorithm_version: String,
+    pub public_context_refs: Vec<String>,
+}
+
+impl InvestmentDecisionRequest {
+    pub fn new(
+        session_id: impl Into<String>,
+        declared_daily_capital_paise: i64,
+        ipos: Vec<PlannedIpo>,
+        algorithm_version: impl Into<String>,
+    ) -> Self {
+        Self::with_account_count(session_id, declared_daily_capital_paise, ipos, algorithm_version, 0)
+    }
+
+    pub fn with_account_count(
+        session_id: impl Into<String>,
+        declared_daily_capital_paise: i64,
+        ipos: Vec<PlannedIpo>,
+        algorithm_version: impl Into<String>,
+        account_count: u32,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            declared_daily_capital_paise,
+            account_count,
+            ipos,
+            algorithm_version: algorithm_version.into(),
+            public_context_refs: Vec::new(),
+        }
+    }
+
+    /// Fail closed if any string field carries a PAN-like or UPI-like token.
+    pub fn assert_safe(&self) -> Result<(), AirBoundaryError> {
+        for ipo in &self.ipos {
+            if looks_like_pan(&ipo.typed_name) {
+                return Err(AirBoundaryError::ProhibitedToken("pan"));
+            }
+            if looks_like_upi(&ipo.typed_name) {
+                return Err(AirBoundaryError::ProhibitedToken("upi"));
+            }
+        }
+        for r in &self.public_context_refs {
+            if looks_like_pan(r) {
+                return Err(AirBoundaryError::ProhibitedToken("pan"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Public-only storage that may be exposed through the allowlisted AI gateway.
 pub trait IntelligenceVault: Send + Sync {
     type Error;

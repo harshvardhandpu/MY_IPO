@@ -8,6 +8,7 @@ members = [
   "crates/identity-security",
   "crates/local-index",
   "crates/member-vault",
+  "crates/ranking",
   "crates/sync-engine",
 ]
 resolver = "2"
