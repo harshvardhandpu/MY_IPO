@@ -8,7 +8,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sanket_domain::EventEnvelope;
+use sanket_domain::{CoreMember, EventEnvelope, FriendAccount};
 use sanket_identity_security::EncryptedIdentityEnvelope;
 use thiserror::Error;
 
@@ -20,9 +20,15 @@ use thiserror::Error;
 ///     <member-id>.enc
 ///     friends/
 ///       <friend-id>.enc
+///   _profiles/
+///     members/<member-id>.json   (masked PAN only)
+///     friends/<friend-id>.json   (masked PAN only)
+///   _events/<event-id>.json
 /// ```
 pub const SECURE_IDENTITY_DIR: &str = "_secure_identity";
 pub const FRIENDS_DIR: &str = "friends";
+pub const PROFILES_DIR: &str = "_profiles";
+pub const MEMBERS_DIR: &str = "members";
 
 #[derive(Debug, Error)]
 pub enum MemberVaultError {
@@ -133,6 +139,75 @@ impl MemberVault {
         let path = dir.join(format!("{}.json", event.event_id()));
         Ok(write_atomically(&path, &serde_json::to_vec(event)?)?)
     }
+
+    fn member_profiles_dir(&self) -> PathBuf {
+        self.root.join(PROFILES_DIR).join(MEMBERS_DIR)
+    }
+
+    fn friend_profiles_dir(&self) -> PathBuf {
+        self.root.join(PROFILES_DIR).join(FRIENDS_DIR)
+    }
+
+    /// Persist a member profile (masked PAN only — safe plaintext).
+    pub fn store_member_profile(&self, member: &CoreMember) -> Result<(), MemberVaultError> {
+        Self::validate_id(member.id())?;
+        let dir = self.member_profiles_dir();
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", member.id()));
+        Ok(write_atomically(&path, &serde_json::to_vec(member)?)?)
+    }
+
+    /// Persist a friend profile (masked PAN only — safe plaintext).
+    pub fn store_friend_profile(&self, friend: &FriendAccount) -> Result<(), MemberVaultError> {
+        Self::validate_id(friend.id())?;
+        let dir = self.friend_profiles_dir();
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", friend.id()));
+        Ok(write_atomically(&path, &serde_json::to_vec(friend)?)?)
+    }
+
+    /// Load a member profile.
+    pub fn load_member_profile(&self, member_id: &str) -> Result<CoreMember, MemberVaultError> {
+        Self::validate_id(member_id)?;
+        let path = self.member_profiles_dir().join(format!("{member_id}.json"));
+        Ok(serde_json::from_slice(&fs::read(path)?)?)
+    }
+
+    /// Load a friend profile.
+    pub fn load_friend_profile(&self, friend_id: &str) -> Result<FriendAccount, MemberVaultError> {
+        Self::validate_id(friend_id)?;
+        let path = self.friend_profiles_dir().join(format!("{friend_id}.json"));
+        Ok(serde_json::from_slice(&fs::read(path)?)?)
+    }
+
+    /// List stored member ids (file stems under `_profiles/members/`).
+    pub fn list_member_ids(&self) -> Result<Vec<String>, MemberVaultError> {
+        list_ids(&self.member_profiles_dir())
+    }
+
+    /// List stored friend ids (file stems under `_profiles/friends/`).
+    pub fn list_friend_ids(&self) -> Result<Vec<String>, MemberVaultError> {
+        list_ids(&self.friend_profiles_dir())
+    }
+}
+
+fn list_ids(dir: &Path) -> Result<Vec<String>, MemberVaultError> {
+    let mut ids = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                ids.push(stem.to_owned());
+            }
+        }
+    }
+    Ok(ids)
 }
 
 fn validate_envelope(envelope: &EncryptedIdentityEnvelope) -> Result<(), MemberVaultError> {

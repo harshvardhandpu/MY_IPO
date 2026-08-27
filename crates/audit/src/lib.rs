@@ -1,4 +1,5 @@
 use sanket_domain::{EventEnvelope, EventError, EventPayload, NewEvent};
+use sanket_identity_security::SensitiveAccessAudit;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditContext {
@@ -7,6 +8,17 @@ pub struct AuditContext {
     pub device_id: String,
     pub occurred_at: String,
     pub app_version: String,
+}
+
+/// Convert a service-emitted [`SensitiveAccessAudit`] into a sealable event.
+///
+/// This is the wiring between purpose-scoped access and durable event
+/// persistence: callers append the resulting envelope to the MemberVault.
+pub fn access_audit_event(
+    audit: &SensitiveAccessAudit,
+    context: AuditContext,
+) -> Result<EventEnvelope, EventError> {
+    sensitive_identity_accessed(context, audit.account_id.clone(), audit.purpose.clone())
 }
 
 pub fn sensitive_identity_accessed(
