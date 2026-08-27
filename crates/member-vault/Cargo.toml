@@ -8,3 +8,10 @@ publish.workspace = true
 
 [dependencies]
 sanket-domain = { path = "../domain" }
+sanket-identity-security = { path = "../identity-security" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+sanket-intelligence-vault = { path = "../intelligence-vault" }

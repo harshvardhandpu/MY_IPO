@@ -139,6 +139,10 @@ impl EventEnvelope {
         &self.event_type
     }
 
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
     pub fn content_hash(&self) -> &str {
         &self.content_hash
     }
