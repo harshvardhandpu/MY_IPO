@@ -122,7 +122,7 @@ fn active_friend_is_investable() {
 
 #[test]
 fn friend_added_event_is_member_wide_notification() {
-    let payload = EventPayload::FriendAccountAdded {
+    let payload = EventPayload::FriendAdded {
         friend_id: "friend-1".to_owned(),
         owner_member_id: "member-1".to_owned(),
         label: "Broker friend".to_owned(),
@@ -130,16 +130,16 @@ fn friend_added_event_is_member_wide_notification() {
     };
     // Notification events carry no PAN — only ids, label, and share terms.
     let json = serde_json::to_string(&payload).unwrap();
-    assert!(json.contains("FRIEND_ACCOUNT_ADDED"));
+    assert!(json.contains("FRIEND_ADDED"));
     assert!(json.contains("friend-1"));
 }
 
 #[test]
 fn friend_archived_event_is_member_wide_notification() {
-    let payload = EventPayload::FriendAccountArchived {
+    let payload = EventPayload::FriendArchived {
         friend_id: "friend-1".to_owned(),
         owner_member_id: "member-1".to_owned(),
     };
     let json = serde_json::to_string(&payload).unwrap();
-    assert!(json.contains("FRIEND_ACCOUNT_ARCHIVED"));
+    assert!(json.contains("FRIEND_ARCHIVED"));
 }

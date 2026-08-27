@@ -2,9 +2,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod investment;
 mod members;
 mod money;
 
+pub use investment::{
+    InvestmentAllocation, InvestmentError, InvestmentSession, IpoApplication, SessionStatus,
+};
 pub use members::{CoreMember, FriendAccount, FriendShareError, MemberStatus};
 pub use money::{BasisPoints, BasisPointsError, Money};
 
@@ -47,17 +51,59 @@ pub enum EventPayload {
         account_id: String,
         purpose: String,
     },
+    /// Member onboarded. Carries display name only — never PAN/UPI/email.
+    MemberCreated {
+        member_id: String,
+        display_name: String,
+        role: Role,
+    },
     /// Member-wide notification: a friend account was added. Carries no PAN.
-    FriendAccountAdded {
+    FriendAdded {
         friend_id: String,
         owner_member_id: String,
         label: String,
         share_basis_points: i64,
     },
     /// Member-wide notification: a friend account was archived (never deleted).
-    FriendAccountArchived {
+    FriendArchived {
         friend_id: String,
         owner_member_id: String,
+    },
+    /// An investment session was opened with a positive declared capital.
+    InvestmentSessionCreated {
+        session_id: String,
+        actor_member_id: String,
+        declared_capital_paise: i64,
+    },
+    /// An IPO application was added to a session.
+    IpoApplicationCreated {
+        application_id: String,
+        session_id: String,
+        ipo_name: String,
+        planned_amount_paise: i64,
+    },
+    /// A final allocation was added (account-scoped; no PAN).
+    AllocationAdded {
+        allocation_id: String,
+        application_id: String,
+        account_id: String,
+        amount_paise: i64,
+        share_basis_points: i64,
+    },
+    /// The session was submitted. References an optional recommendation.
+    InvestmentSessionSubmitted {
+        session_id: String,
+        recommendation_id: Option<String>,
+    },
+    /// A recommendation was generated (algorithm-version tagged, draft only).
+    InvestmentRecommendationGenerated {
+        session_id: String,
+        algorithm_version: String,
+    },
+    /// A recommendation was applied to the draft (does not auto-submit).
+    InvestmentRecommendationApplied {
+        session_id: String,
+        recommendation_id: String,
     },
 }
 
@@ -67,8 +113,15 @@ impl EventPayload {
             Self::DeviceRegistered { .. } => "DEVICE_REGISTERED",
             Self::SettingsInitialized { .. } => "SETTINGS_INITIALIZED",
             Self::SensitiveIdentityAccessed { .. } => "SENSITIVE_IDENTITY_ACCESSED",
-            Self::FriendAccountAdded { .. } => "FRIEND_ACCOUNT_ADDED",
-            Self::FriendAccountArchived { .. } => "FRIEND_ACCOUNT_ARCHIVED",
+            Self::MemberCreated { .. } => "MEMBER_CREATED",
+            Self::FriendAdded { .. } => "FRIEND_ADDED",
+            Self::FriendArchived { .. } => "FRIEND_ARCHIVED",
+            Self::InvestmentSessionCreated { .. } => "INVESTMENT_SESSION_CREATED",
+            Self::IpoApplicationCreated { .. } => "IPO_APPLICATION_CREATED",
+            Self::AllocationAdded { .. } => "ALLOCATION_ADDED",
+            Self::InvestmentSessionSubmitted { .. } => "INVESTMENT_SESSION_SUBMITTED",
+            Self::InvestmentRecommendationGenerated { .. } => "INVESTMENT_RECOMMENDATION_GENERATED",
+            Self::InvestmentRecommendationApplied { .. } => "INVESTMENT_RECOMMENDATION_APPLIED",
         }
     }
 }
@@ -131,7 +184,13 @@ struct HashableEvent<'a> {
 }
 
 impl EventEnvelope {
-    pub fn seal(event: NewEvent) -> Result<Self, EventError> {
+    pub fn seal(mut event: NewEvent) -> Result<Self, EventError> {
+        // If the caller left the event id empty, mint a stable UUIDv7 id so
+        // events are unique and append-only without forcing every caller to
+        // generate ids by hand.
+        if event.event_id.trim().is_empty() {
+            event.event_id = uuid::Uuid::now_v7().to_string();
+        }
         validate_required("event_id", &event.event_id)?;
         validate_required("aggregate_type", &event.aggregate_type)?;
         validate_required("aggregate_id", &event.aggregate_id)?;

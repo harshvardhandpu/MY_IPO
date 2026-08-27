@@ -129,7 +129,7 @@ fn friend_added_notification_event_persists_without_pan() {
     let root = temp_root("notify");
     let vault = MemberVault::open(&root).expect("open");
 
-    let payload = EventPayload::FriendAccountAdded {
+    let payload = EventPayload::FriendAdded {
         friend_id: "friend-1".to_owned(),
         owner_member_id: "member-1".to_owned(),
         label: "Broker".to_owned(),
@@ -152,7 +152,7 @@ fn friend_added_notification_event_persists_without_pan() {
 
     let bytes = std::fs::read(root.join("_events/evt-1.json")).expect("read");
     let text = String::from_utf8(bytes).expect("utf8");
-    assert!(text.contains("FRIEND_ACCOUNT_ADDED"));
+    assert!(text.contains("FRIEND_ADDED"));
     assert!(text.contains("friend-1"));
 
     let _ = std::fs::remove_dir_all(&root);
