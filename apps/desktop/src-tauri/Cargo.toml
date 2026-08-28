@@ -20,6 +20,7 @@ tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
 sanket-device-settings = { path = "../../../crates/device-settings" }
 sanket-domain = { path = "../../../crates/domain" }
+sanket-allotment = { path = "../../../crates/allotment" }
 sanket-identity-security = { path = "../../../crates/identity-security" }
 sanket-intelligence-vault = { path = "../../../crates/intelligence-vault" }
 sanket-local-index = { path = "../../../crates/local-index" }

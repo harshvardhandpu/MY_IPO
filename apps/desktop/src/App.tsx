@@ -54,8 +54,45 @@ interface IpoDraft {
   included: boolean;
 }
 
-type View = "dashboard" | "members" | "invest";
+type View = "dashboard" | "members" | "invest" | "allotment";
 type BootState = "loading" | "ready" | "offline";
+
+interface AllotmentCandidate {
+  application_id: string;
+  session_id: string;
+  ipo_name: string;
+  planned_amount_paise: number;
+  account_count: number;
+  registrar_id: string;
+  registrar_name: string;
+  official_status_url?: string | null;
+  provider_status: string;
+}
+
+interface AllotmentReportRow {
+  attempt_id: string;
+  account_id: string;
+  display_name: string;
+  account_kind: string;
+  masked_pan: string;
+  status: string;
+  allotted_lots?: number | null;
+  allotted_shares?: number | null;
+  provider_id: string;
+  source: string;
+}
+
+interface AllotmentJobReport {
+  job_id: string;
+  application_id: string;
+  ipo_name: string;
+  registrar_id: string;
+  registrar_name: string;
+  provider_id: string;
+  status: string;
+  official_status_url?: string | null;
+  accounts: AllotmentReportRow[];
+}
 
 const EMPTY_DASHBOARD: DashboardData = {
   total_planned_paise: 0,
@@ -118,6 +155,7 @@ function AppShell({
     { label: "Dashboard", view: "dashboard" },
     { label: "Members", view: "members" },
     { label: "Investments", view: "invest" },
+    { label: "Allotment", view: "allotment" },
   ];
 
   return (
@@ -349,9 +387,11 @@ function Onboarding({
 function DashboardView({
   dashboard,
   onInvest,
+  onAllotment,
 }: {
   dashboard: DashboardData;
   onInvest: () => void;
+  onAllotment: () => void;
 }) {
   const metrics = [
     {
@@ -393,9 +433,14 @@ function DashboardView({
             <small>CHECK, edit, then submit</small>
             <ArrowIcon />
           </button>
-          <button aria-label="Check Allotment" className="secondary-action" disabled type="button">
+          <button
+            aria-label="Check Allotment"
+            className="secondary-action"
+            onClick={onAllotment}
+            type="button"
+          >
             <span>Check Allotment</span>
-            <small>Deferred until registrar integration</small>
+            <small>Fixture registrar · purpose-scoped PAN</small>
             <ArrowIcon />
           </button>
         </div>
@@ -929,6 +974,131 @@ function InvestView({
   );
 }
 
+function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: MemberRow[] }) {
+  const [candidates, setCandidates] = useState<AllotmentCandidate[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [report, setReport] = useState<AllotmentJobReport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    bridge
+      .invoke<AllotmentCandidate[]>("list_allotment_candidates")
+      .then((rows) => {
+        setCandidates(rows);
+        if (rows[0]) setSelected(rows[0].application_id);
+      })
+      .catch((e) => setError(String(e)));
+  }, [bridge]);
+
+  async function runCheck() {
+    const candidate = candidates.find((c) => c.application_id === selected);
+    if (!candidate) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await bridge.invoke<AllotmentJobReport>("start_allotment_check", {
+        request: {
+          application_id: candidate.application_id,
+          session_id: candidate.session_id,
+          ipo_name: candidate.ipo_name,
+          actor_member_id: members[0]?.id ?? "unknown",
+          registrar_id: candidate.registrar_id,
+          registrar_name: candidate.registrar_name,
+          official_status_url: candidate.official_status_url,
+        },
+      });
+      setReport(result);
+      setMessage(`Job ${result.job_id} → ${result.status}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="page-content">
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Registrar allotment</p>
+            <h1>Check Allotment</h1>
+            <p>
+              Submitted IPOs only. Fixture KFintech provider for local/synthetic runs. PAN decrypts
+              only inside purpose-scoped allotment checks.
+            </p>
+          </div>
+        </div>
+        {error && <p className="inline-error">{error}</p>}
+        {message && <p className="inline-ok">{message}</p>}
+        <div className="stack-list">
+          {candidates.length === 0 && (
+            <p>No submitted IPO applications yet. Submit an investment first.</p>
+          )}
+          {candidates.map((c) => (
+            <label className="choice-row" key={c.application_id}>
+              <input
+                checked={selected === c.application_id}
+                name="allotment-ipo"
+                onChange={() => setSelected(c.application_id)}
+                type="radio"
+              />
+              <span>
+                <strong>{c.ipo_name}</strong>
+                <small>
+                  {c.registrar_name} · {c.account_count} account
+                  {c.account_count === 1 ? "" : "s"} · {formatRupees(c.planned_amount_paise)}{" "}
+                  planned
+                </small>
+              </span>
+            </label>
+          ))}
+        </div>
+        <footer className="action-rail">
+          <button
+            className="primary-button"
+            disabled={!selected || busy}
+            onClick={runCheck}
+            type="button"
+          >
+            {busy ? "Checking accounts…" : "Check All Accounts"}
+          </button>
+        </footer>
+      </section>
+      {report && (
+        <section aria-label="Allotment report card" className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Report card</p>
+              <h2>{report.ipo_name}</h2>
+              <p>
+                {report.registrar_name} · {report.provider_id} · {report.status}
+              </p>
+            </div>
+          </div>
+          <ul className="stack-list">
+            {report.accounts.map((row) => (
+              <li key={row.attempt_id}>
+                <strong>
+                  {row.display_name} · {row.account_kind}
+                </strong>
+                <small>
+                  {row.masked_pan} · {row.status}
+                  {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
+                  {row.allotted_shares != null ? ` / ${row.allotted_shares} shares` : ""}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
 export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
   const [boot, setBoot] = useState<BootState>("loading");
   const [view, setView] = useState<View>("dashboard");
@@ -980,7 +1150,11 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
     <AppShell active={view} memberCount={members.length + friends.length} setActive={setView}>
       {boot === "loading" && <div className="loading-bar" aria-label="Loading local vault" />}
       {view === "dashboard" && (
-        <DashboardView dashboard={dashboard} onInvest={() => setView("invest")} />
+        <DashboardView
+          dashboard={dashboard}
+          onAllotment={() => setView("allotment")}
+          onInvest={() => setView("invest")}
+        />
       )}
       {view === "members" && (
         <MembersView
@@ -1008,6 +1182,7 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
           onSubmitted={loadDashboard}
         />
       )}
+      {view === "allotment" && <AllotmentView bridge={bridge} members={members} />}
     </AppShell>
   );
 }

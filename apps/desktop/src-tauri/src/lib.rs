@@ -6,9 +6,9 @@ use serde::Serialize;
 use tauri::Manager;
 
 use service::{
-    AddFriendRequest, AddFriendResponse, Application, CheckRequest, CheckResponse, Dashboard,
-    FriendRow, MemberRow, OnboardMemberRequest, OnboardMemberResponse, SubmitRequest,
-    SubmitResponse,
+    AddFriendRequest, AddFriendResponse, AllotmentCandidateRow, AllotmentJobReport, Application,
+    CheckRequest, CheckResponse, Dashboard, FriendRow, MemberRow, OnboardMemberRequest,
+    OnboardMemberResponse, StartAllotmentRequest, SubmitRequest, SubmitResponse,
 };
 
 #[derive(Clone, Debug)]
@@ -160,6 +160,38 @@ fn get_dashboard(state: tauri::State<'_, AppState>) -> Result<Dashboard, String>
     state.application()?.dashboard().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn list_allotment_candidates(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AllotmentCandidateRow>, String> {
+    state
+        .application()?
+        .list_allotment_candidates()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn start_allotment_check(
+    state: tauri::State<'_, AppState>,
+    request: StartAllotmentRequest,
+) -> Result<AllotmentJobReport, String> {
+    state
+        .application()?
+        .start_allotment_check(request)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_allotment_report(
+    state: tauri::State<'_, AppState>,
+    job_id: String,
+) -> Result<AllotmentJobReport, String> {
+    state
+        .application()?
+        .get_allotment_report(&job_id)
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -188,7 +220,10 @@ pub fn run() {
             list_friends,
             check_recommendation,
             submit_investment,
-            get_dashboard
+            get_dashboard,
+            list_allotment_candidates,
+            start_allotment_check,
+            get_allotment_report
         ])
         .run(tauri::generate_context!())
         .expect("Sanket IPO desktop runtime failed");
