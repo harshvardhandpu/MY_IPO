@@ -6,6 +6,7 @@
 //! audited access service. Nothing here must ever serialize, display, or log a
 //! full PAN by accident.
 
+mod key_provider;
 mod pan;
 mod redacted;
 mod secret;
@@ -13,6 +14,10 @@ mod secret;
 pub mod crypto;
 
 pub use crypto::{CipherError, EncryptedIdentityEnvelope, IdentityCipher, IdentityKey};
+pub use key_provider::{
+    InMemoryKeyProvider, KeyId, KeyProvider, KeyProviderClass, KeyProviderError,
+    OsKeyringKeyProvider, RuntimeSecurityMode, assert_mode_allows_provider,
+};
 pub use pan::{MaskedPan, Pan, PanError};
 pub use redacted::Redacted;
 pub use secret::{IdentitySecret, IdentitySecretError};
@@ -30,43 +35,6 @@ pub enum SensitivePurpose {
     /// Any unrecognized purpose (rejected by the access service).
     #[serde(other)]
     Unknown,
-}
-
-/// An opaque, stable identifier for a key in a [`KeyProvider`] implementation.
-pub type KeyId = String;
-
-/// A provider that resolves stable key identifiers to [`IdentityKey`] values.
-///
-/// Production implementations will back this with Windows Credential Manager or
-/// the Linux Secret Service. Phase 2A ships an in-memory provider for tests and
-/// development; the OS-keyring implementations are documented but deferred.
-pub trait KeyProvider: Send + Sync {
-    fn key(&self, key_id: &str) -> Option<IdentityKey>;
-}
-
-/// A development/test key provider that holds keys in memory only.
-pub struct InMemoryKeyProvider {
-    key_id: KeyId,
-    key: IdentityKey,
-}
-
-impl InMemoryKeyProvider {
-    pub fn new(key_id: impl Into<KeyId>, key: IdentityKey) -> Self {
-        Self {
-            key_id: key_id.into(),
-            key,
-        }
-    }
-}
-
-impl KeyProvider for InMemoryKeyProvider {
-    fn key(&self, key_id: &str) -> Option<IdentityKey> {
-        if key_id == self.key_id {
-            Some(self.key.clone())
-        } else {
-            None
-        }
-    }
 }
 
 /// A minimally-descriptive, non-sensitive reference to an identity record.
@@ -160,6 +128,8 @@ pub enum AccessError {
     Cipher(#[from] CipherError),
     #[error("no key available for key id {0}")]
     MissingKey(String),
+    #[error("key provider error: {0}")]
+    KeyProvider(String),
     #[error("identity payload is invalid")]
     Payload,
 }
@@ -177,6 +147,13 @@ impl SensitiveIdentityService {
     pub fn new(provider: impl KeyProvider + 'static) -> Self {
         Self {
             provider: Box::new(provider),
+            last_audit: None,
+        }
+    }
+
+    pub fn new_boxed(provider: Box<dyn KeyProvider>) -> Self {
+        Self {
+            provider,
             last_audit: None,
         }
     }
@@ -229,10 +206,10 @@ impl SensitiveIdentityService {
         };
 
         let key_id = record.envelope().key_id();
-        let key = self
-            .provider
-            .key(key_id)
-            .ok_or_else(|| AccessError::MissingKey(key_id.to_owned()))?;
+        let key = self.provider.key(key_id).map_err(|e| match e {
+            KeyProviderError::MissingKey(id) => AccessError::MissingKey(id),
+            other => AccessError::KeyProvider(other.to_string()),
+        })?;
         let decrypt_cipher = IdentityCipher::new(key);
         let plaintext = decrypt_cipher.decrypt(record.envelope())?;
 

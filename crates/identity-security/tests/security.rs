@@ -136,7 +136,7 @@ fn in_memory_key_provider_round_trips() {
     let provider = InMemoryKeyProvider::new("kid-1", sample_key());
     let fetched = provider.key("kid-1").expect("present");
     assert_eq!(fetched.as_bytes(), &[7u8; 32]);
-    assert!(provider.key("missing").is_none());
+    assert!(provider.key("missing").is_err());
 }
 
 // ---------- Sensitive identity ----------

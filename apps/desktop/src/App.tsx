@@ -94,6 +94,21 @@ interface AllotmentJobReport {
   accounts: AllotmentReportRow[];
 }
 
+interface SecurityStatus {
+  mode: string;
+  key_provider: string;
+  real_pan_allowed: boolean;
+  os_keyring_release_blocker: boolean;
+  blocker?: string | null;
+}
+
+interface EstimatedProfit {
+  basis: string;
+  estimated_profit_paise?: number | null;
+  note?: string | null;
+  is_realized: boolean;
+}
+
 const EMPTY_DASHBOARD: DashboardData = {
   total_planned_paise: 0,
   submitted_session_count: 0,
@@ -974,15 +989,131 @@ function InvestView({
   );
 }
 
+function ProfitEditor({
+  bridge,
+  report,
+  row,
+  actorMemberId,
+}: {
+  bridge: CommandBridge;
+  report: AllotmentJobReport;
+  row: AllotmentReportRow;
+  actorMemberId: string;
+}) {
+  const [basis, setBasis] = useState("UNAVAILABLE");
+  const [issuePrice, setIssuePrice] = useState("");
+  const [referencePrice, setReferencePrice] = useState("");
+  const [source, setSource] = useState("");
+  const [asOf, setAsOf] = useState("");
+  const [result, setResult] = useState<EstimatedProfit | null>(null);
+  const [error, setError] = useState("");
+
+  async function calculate() {
+    setError("");
+    try {
+      const estimate = await bridge.invoke<EstimatedProfit>("estimate_profit", {
+        request: {
+          application_id: report.application_id,
+          account_id: row.account_id,
+          actor_member_id: actorMemberId,
+          basis,
+          allotted_shares: row.allotted_shares ?? 0,
+          reference_price_paise: referencePrice ? paiseFromRupees(referencePrice) : null,
+          issue_price_paise: issuePrice ? paiseFromRupees(issuePrice) : null,
+          source,
+          as_of: asOf,
+          note: null,
+        },
+      });
+      setResult(estimate);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  return (
+    <details className="profit-estimator">
+      <summary>Estimated profit basis</summary>
+      <p className="form-note">Estimate only. Realized profit is recorded separately.</p>
+      <div className="compact-grid">
+        <label>
+          Basis
+          <select
+            aria-label={`Profit basis for ${row.display_name}`}
+            value={basis}
+            onChange={(e) => setBasis(e.target.value)}
+          >
+            <option value="UNAVAILABLE">Unavailable</option>
+            <option value="ACTUAL_LISTING_PRICE">Actual listing price</option>
+            <option value="CURRENT_MARKET_PRICE">Current market price</option>
+            <option value="OWNER_EXPECTED_PRICE">Owner expected price</option>
+            <option value="PUBLIC_ESTIMATE">Public estimate</option>
+          </select>
+        </label>
+        <label>
+          Issue price (₹)
+          <input
+            inputMode="decimal"
+            value={issuePrice}
+            onChange={(e) => setIssuePrice(e.target.value)}
+          />
+        </label>
+        <label>
+          Reference price (₹)
+          <input
+            inputMode="decimal"
+            value={referencePrice}
+            onChange={(e) => setReferencePrice(e.target.value)}
+          />
+        </label>
+        <label>
+          Source / owner
+          <input value={source} onChange={(e) => setSource(e.target.value)} />
+        </label>
+        <label>
+          As of
+          <input
+            placeholder="YYYY-MM-DD or market close"
+            value={asOf}
+            onChange={(e) => setAsOf(e.target.value)}
+          />
+        </label>
+      </div>
+      <button className="secondary-button" onClick={() => void calculate()} type="button">
+        Save estimate basis
+      </button>
+      {result && (
+        <p className="inline-ok">
+          {result.estimated_profit_paise == null
+            ? "Estimate unavailable — no price was invented."
+            : `${formatRupees(result.estimated_profit_paise)} estimated · ${result.basis}`}
+        </p>
+      )}
+      {error && <p className="inline-error">{error}</p>}
+    </details>
+  );
+}
+
 function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: MemberRow[] }) {
   const [candidates, setCandidates] = useState<AllotmentCandidate[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [report, setReport] = useState<AllotmentJobReport | null>(null);
+  const [security, setSecurity] = useState<SecurityStatus | null>(null);
+  const [providerId, setProviderId] = useState("kfintech-fixture");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [manualAccountId, setManualAccountId] = useState("");
+  const [manualResult, setManualResult] = useState("NOT_ALLOTTED");
+  const [manualLots, setManualLots] = useState("");
+  const [manualShares, setManualShares] = useState("");
+  const [manualNote, setManualNote] = useState("");
 
   useEffect(() => {
+    bridge
+      .invoke<SecurityStatus>("get_security_status")
+      .then(setSecurity)
+      .catch((e) => setError(String(e)));
     bridge
       .invoke<AllotmentCandidate[]>("list_allotment_candidates")
       .then((rows) => {
@@ -991,6 +1122,34 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
       })
       .catch((e) => setError(String(e)));
   }, [bridge]);
+
+  useEffect(() => {
+    if (
+      !report ||
+      ["COMPLETE", "COMPLETE_WITH_UNCONFIRMED", "NEEDS_HUMAN_VERIFICATION", "CANCELLED"].includes(
+        report.status,
+      )
+    ) {
+      setBusy(false);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      bridge
+        .invoke<AllotmentJobReport>("get_allotment_report", { jobId: report.job_id })
+        .then((next) => {
+          setReport(next);
+          setMessage(`Job ${next.job_id} → ${next.status}`);
+        })
+        .catch((cause) => setError(String(cause)));
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [bridge, report]);
+
+  useEffect(() => {
+    if (report?.accounts[0] && !manualAccountId) {
+      setManualAccountId(report.accounts[0].account_id);
+    }
+  }, [manualAccountId, report]);
 
   async function runCheck() {
     const candidate = candidates.find((c) => c.application_id === selected);
@@ -1008,14 +1167,40 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
           registrar_id: candidate.registrar_id,
           registrar_name: candidate.registrar_name,
           official_status_url: candidate.official_status_url,
+          provider_id: providerId,
         },
       });
       setReport(result);
       setMessage(`Job ${result.job_id} → ${result.status}`);
     } catch (e) {
       setError(String(e));
-    } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveManualResult(event: FormEvent) {
+    event.preventDefault();
+    if (!report || !manualAccountId) return;
+    setError(null);
+    try {
+      await bridge.invoke("record_manual_allotment", {
+        request: {
+          job_id: report.job_id,
+          account_id: manualAccountId,
+          actor_member_id: members[0]?.id ?? "unknown",
+          allotted_lots: manualLots ? Number(manualLots) : null,
+          allotted_shares: manualShares ? Number(manualShares) : null,
+          explicit_not_allotted: manualResult === "NOT_ALLOTTED",
+          note: manualNote || null,
+        },
+      });
+      const next = await bridge.invoke<AllotmentJobReport>("get_allotment_report", {
+        jobId: report.job_id,
+      });
+      setReport(next);
+      setMessage("Manual result saved with explicit MANUAL provenance.");
+    } catch (cause) {
+      setError(String(cause));
     }
   }
 
@@ -1027,11 +1212,35 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
             <p className="eyebrow">Registrar allotment</p>
             <h1>Check Allotment</h1>
             <p>
-              Submitted IPOs only. Fixture KFintech provider for local/synthetic runs. PAN decrypts
-              only inside purpose-scoped allotment checks.
+              Durable local jobs check each account sequentially. PAN decrypts only inside the
+              purpose-scoped provider call and is never stored in job state.
             </p>
           </div>
         </div>
+        {security && (
+          <div
+            className={
+              security.real_pan_allowed ? "security-strip ready" : "security-strip blocker"
+            }
+            role="status"
+          >
+            <strong>{security.mode}</strong>
+            <span>
+              {security.real_pan_allowed
+                ? `OS keyring verified · ${security.key_provider}`
+                : (security.blocker ?? "Real PAN is blocked")}
+            </span>
+          </div>
+        )}
+        <label className="provider-select">
+          Provider mode
+          <select value={providerId} onChange={(e) => setProviderId(e.target.value)}>
+            <option value="kfintech-fixture">KFintech fixture · synthetic only</option>
+            <option disabled={!security?.real_pan_allowed} value="kfintech-live">
+              KFintech live · OS keyring required
+            </option>
+          </select>
+        </label>
         {error && <p className="inline-error">{error}</p>}
         {message && <p className="inline-ok">{message}</p>}
         <div className="stack-list">
@@ -1064,8 +1273,17 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
             onClick={runCheck}
             type="button"
           >
-            {busy ? "Checking accounts…" : "Check All Accounts"}
+            {busy ? "Queued · running in background…" : "Check All Accounts"}
           </button>
+          {busy && report && (
+            <button
+              className="secondary-button"
+              onClick={() => void bridge.invoke("cancel_allotment_job", { jobId: report.job_id })}
+              type="button"
+            >
+              Cancel safely
+            </button>
+          )}
         </footer>
       </section>
       {report && (
@@ -1086,13 +1304,84 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                   {row.display_name} · {row.account_kind}
                 </strong>
                 <small>
-                  {row.masked_pan} · {row.status}
+                  {row.masked_pan} · {row.status} · {row.source}
                   {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
                   {row.allotted_shares != null ? ` / ${row.allotted_shares} shares` : ""}
                 </small>
+                {row.allotted_shares != null && row.allotted_shares > 0 && (
+                  <ProfitEditor
+                    actorMemberId={members[0]?.id ?? "unknown"}
+                    bridge={bridge}
+                    report={report}
+                    row={row}
+                  />
+                )}
               </li>
             ))}
           </ul>
+          {report.official_status_url && (
+            <p>
+              <a href={report.official_status_url} rel="noreferrer" target="_blank">
+                Continue on the official registrar site
+              </a>{" "}
+              if CAPTCHA, OTP, or browser verification is required. Return here to save the result
+              manually.
+            </p>
+          )}
+          {report.accounts.length > 0 && (
+            <form className="manual-result-form" onSubmit={saveManualResult}>
+              <h3>Record manual result</h3>
+              <p className="form-note">
+                Saved as MANUAL with local actor, device, and event provenance.
+              </p>
+              <div className="compact-grid">
+                <label>
+                  Account
+                  <select
+                    value={manualAccountId}
+                    onChange={(e) => setManualAccountId(e.target.value)}
+                  >
+                    {report.accounts.map((row) => (
+                      <option key={row.account_id} value={row.account_id}>
+                        {row.display_name} · {row.masked_pan}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Result
+                  <select value={manualResult} onChange={(e) => setManualResult(e.target.value)}>
+                    <option value="NOT_ALLOTTED">Not allotted</option>
+                    <option value="ALLOTTED">Allotted</option>
+                    <option value="UNCONFIRMED">Unconfirmed</option>
+                  </select>
+                </label>
+                <label>
+                  Lots
+                  <input
+                    inputMode="numeric"
+                    value={manualLots}
+                    onChange={(e) => setManualLots(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Shares
+                  <input
+                    inputMode="numeric"
+                    value={manualShares}
+                    onChange={(e) => setManualShares(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Note
+                  <input value={manualNote} onChange={(e) => setManualNote(e.target.value)} />
+                </label>
+              </div>
+              <button className="secondary-button" type="submit">
+                Save manual provenance
+              </button>
+            </form>
+          )}
         </section>
       )}
     </div>

@@ -113,6 +113,53 @@ CREATE INDEX IF NOT EXISTS idx_allotment_attempts_job ON allotment_attempts(job_
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
 "#;
 
+// Schema v4: durable worker ownership/retry state plus safe public provider and
+// estimated-profit projections. Sensitive identity values are never stored.
+const SCHEMA_V4: &str = r#"
+BEGIN;
+ALTER TABLE allotment_jobs ADD COLUMN actor_member_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE allotment_jobs ADD COLUMN lease_owner_device_id TEXT;
+ALTER TABLE allotment_jobs ADD COLUMN lease_token TEXT;
+ALTER TABLE allotment_jobs ADD COLUMN lease_expires_at INTEGER;
+ALTER TABLE allotment_jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE allotment_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE allotment_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS provider_issue_mappings (
+    application_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    registrar_id TEXT NOT NULL,
+    provider_issue_id TEXT NOT NULL,
+    ipo_name TEXT NOT NULL,
+    official_status_url TEXT NOT NULL,
+    last_verified_at TEXT NOT NULL,
+    PRIMARY KEY(application_id, provider_id)
+);
+
+CREATE TABLE IF NOT EXISTS provider_health (
+    provider_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    safe_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS estimated_profit_bases (
+    application_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    reference_price_paise INTEGER,
+    issue_price_paise INTEGER,
+    allotted_shares INTEGER NOT NULL,
+    estimated_profit_paise INTEGER,
+    provenance TEXT,
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY(application_id, account_id)
+);
+
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
+COMMIT;
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
 }
@@ -122,6 +169,37 @@ pub type AllocationProjectionRow = (String, String, String, i64, i64);
 pub type SubmittedApplicationRow = (String, String, String, i64, u32);
 pub type AllotmentJobRow = (String, String, String, String, String, String);
 pub type AllotmentAttemptRow = (String, String, String, Option<i64>, Option<i64>, String);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllotmentJobExecutionRow {
+    pub id: String,
+    pub application_id: String,
+    pub session_id: String,
+    pub ipo_name: String,
+    pub registrar_id: String,
+    pub registrar_name: String,
+    pub official_status_url: Option<String>,
+    pub provider_id: String,
+    pub status: String,
+    pub actor_member_id: String,
+    pub cancel_requested: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllotmentAttemptState {
+    pub id: String,
+    pub job_id: String,
+    pub account_id: String,
+    pub status: String,
+    pub attempt_count: u32,
+    pub allotted_lots: Option<i64>,
+    pub allotted_shares: Option<i64>,
+    pub provider_reference: Option<String>,
+    pub safe_message: Option<String>,
+    pub source: String,
+    pub last_attempt_at: Option<String>,
+    pub next_retry_at: Option<String>,
+}
 
 #[derive(Debug, Error)]
 pub enum LocalIndexError {
@@ -150,6 +228,14 @@ impl LocalIndex {
         connection.execute_batch(SCHEMA_V1)?;
         connection.execute_batch(SCHEMA_V2)?;
         connection.execute_batch(SCHEMA_V3)?;
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if version < 4 {
+            connection.execute_batch(SCHEMA_V4)?;
+        }
         Ok(Self { connection })
     }
 
@@ -398,13 +484,15 @@ impl LocalIndex {
                 session_id,
                 ipo_name,
                 registrar_id,
+                registrar_name,
+                official_status_url,
                 provider_id,
             } => {
                 self.connection.execute(
                     "INSERT INTO allotment_jobs(
                         id, application_id, session_id, ipo_name, registrar_id, registrar_name,
-                        provider_id, status
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 'CREATED')
+                        official_status_url, provider_id, status, actor_member_id, created_at, updated_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'CREATED', ?9, ?10, ?10)
                      ON CONFLICT(id) DO UPDATE SET status=excluded.status",
                     params![
                         job_id,
@@ -412,7 +500,11 @@ impl LocalIndex {
                         session_id,
                         ipo_name,
                         registrar_id,
-                        provider_id
+                        registrar_name,
+                        official_status_url,
+                        provider_id,
+                        event.actor_member_id(),
+                        event.occurred_at()
                     ],
                 )?;
             }
@@ -456,6 +548,121 @@ impl LocalIndex {
                     ],
                 )?;
             }
+            sanket_domain::EventPayload::AllotmentAttemptStateUpdated {
+                attempt_id,
+                job_id,
+                account_id,
+                status,
+                attempt_count,
+                allotted_lots,
+                allotted_shares,
+                source,
+                provider_reference,
+                safe_message,
+                last_attempt_at,
+                next_retry_at,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO allotment_attempts(
+                        id, job_id, account_id, status, attempt_count, allotted_lots,
+                        allotted_shares, provider_reference, safe_message, source,
+                        last_attempt_at, next_retry_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                     ON CONFLICT(id) DO UPDATE SET
+                        status=excluded.status,
+                        attempt_count=excluded.attempt_count,
+                        allotted_lots=excluded.allotted_lots,
+                        allotted_shares=excluded.allotted_shares,
+                        provider_reference=excluded.provider_reference,
+                        safe_message=excluded.safe_message,
+                        source=excluded.source,
+                        last_attempt_at=excluded.last_attempt_at,
+                        next_retry_at=excluded.next_retry_at",
+                    params![
+                        attempt_id,
+                        job_id,
+                        account_id,
+                        status,
+                        *attempt_count as i64,
+                        allotted_lots.map(|v| v as i64),
+                        allotted_shares.map(|v| v as i64),
+                        provider_reference,
+                        safe_message,
+                        source,
+                        last_attempt_at,
+                        next_retry_at
+                    ],
+                )?;
+            }
+            sanket_domain::EventPayload::AllotmentProviderDiscovered {
+                application_id,
+                registrar_id,
+                provider_id,
+                provider_issue_id,
+                ipo_name,
+                official_status_url,
+                last_verified_at,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO provider_issue_mappings(
+                        application_id, provider_id, registrar_id, provider_issue_id,
+                        ipo_name, official_status_url, last_verified_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(application_id, provider_id) DO UPDATE SET
+                        registrar_id=excluded.registrar_id,
+                        provider_issue_id=excluded.provider_issue_id,
+                        ipo_name=excluded.ipo_name,
+                        official_status_url=excluded.official_status_url,
+                        last_verified_at=excluded.last_verified_at",
+                    params![
+                        application_id,
+                        provider_id,
+                        registrar_id,
+                        provider_issue_id,
+                        ipo_name,
+                        official_status_url,
+                        last_verified_at
+                    ],
+                )?;
+            }
+            sanket_domain::EventPayload::EstimatedProfitUpdated {
+                application_id,
+                account_id,
+                basis,
+                reference_price_paise,
+                issue_price_paise,
+                allotted_shares,
+                estimated_profit_paise,
+                provenance,
+                observed_at,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO estimated_profit_bases(
+                        application_id, account_id, basis, reference_price_paise,
+                        issue_price_paise, allotted_shares, estimated_profit_paise,
+                        provenance, observed_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     ON CONFLICT(application_id, account_id) DO UPDATE SET
+                        basis=excluded.basis,
+                        reference_price_paise=excluded.reference_price_paise,
+                        issue_price_paise=excluded.issue_price_paise,
+                        allotted_shares=excluded.allotted_shares,
+                        estimated_profit_paise=excluded.estimated_profit_paise,
+                        provenance=excluded.provenance,
+                        observed_at=excluded.observed_at",
+                    params![
+                        application_id,
+                        account_id,
+                        basis,
+                        reference_price_paise,
+                        issue_price_paise,
+                        *allotted_shares as i64,
+                        estimated_profit_paise,
+                        provenance,
+                        observed_at
+                    ],
+                )?;
+            }
             sanket_domain::EventPayload::InvestmentRecommendationApplied { .. }
             | sanket_domain::EventPayload::DeviceRegistered { .. }
             | sanket_domain::EventPayload::SettingsInitialized { .. }
@@ -471,6 +678,9 @@ impl LocalIndex {
     pub fn rebuild(&self, events: &[EventEnvelope]) -> Result<(), LocalIndexError> {
         self.connection.execute_batch(
             "DELETE FROM projection_events;
+             DELETE FROM estimated_profit_bases;
+             DELETE FROM provider_health;
+             DELETE FROM provider_issue_mappings;
              DELETE FROM allotment_attempts;
              DELETE FROM allotment_jobs;
              DELETE FROM allocations;
@@ -628,6 +838,135 @@ impl LocalIndex {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    pub fn allotment_attempt(
+        &self,
+        job_id: &str,
+        account_id: &str,
+    ) -> Result<Option<AllotmentAttemptState>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT id, job_id, account_id, status, attempt_count, allotted_lots,
+                        allotted_shares, provider_reference, safe_message, source,
+                        last_attempt_at, next_retry_at
+                 FROM allotment_attempts WHERE job_id=?1 AND account_id=?2
+                 ORDER BY id LIMIT 1",
+                params![job_id, account_id],
+                |row| {
+                    Ok(AllotmentAttemptState {
+                        id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        account_id: row.get(2)?,
+                        status: row.get(3)?,
+                        attempt_count: row.get::<_, i64>(4)? as u32,
+                        allotted_lots: row.get(5)?,
+                        allotted_shares: row.get(6)?,
+                        provider_reference: row.get(7)?,
+                        safe_message: row.get(8)?,
+                        source: row.get(9)?,
+                        last_attempt_at: row.get(10)?,
+                        next_retry_at: row.get(11)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
+    }
+
+    /// Atomically acquire a job lease. Expired leases are reclaimable after restart.
+    pub fn try_acquire_allotment_lease(
+        &self,
+        job_id: &str,
+        owner_device_id: &str,
+        lease_token: &str,
+        now_epoch_secs: u64,
+        expires_at_epoch_secs: u64,
+    ) -> Result<bool, LocalIndexError> {
+        let changed = self.connection.execute(
+            "UPDATE allotment_jobs SET
+                lease_owner_device_id=?2, lease_token=?3, lease_expires_at=?5,
+                status='RUNNING', updated_at=CAST(?4 AS TEXT)
+             WHERE id=?1 AND cancel_requested=0
+               AND status IN ('CREATED','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
+               AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?4)",
+            params![
+                job_id,
+                owner_device_id,
+                lease_token,
+                now_epoch_secs as i64,
+                expires_at_epoch_secs as i64
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    pub fn release_allotment_lease(
+        &self,
+        job_id: &str,
+        lease_token: &str,
+    ) -> Result<bool, LocalIndexError> {
+        Ok(self.connection.execute(
+            "UPDATE allotment_jobs SET lease_owner_device_id=NULL, lease_token=NULL,
+                    lease_expires_at=NULL
+             WHERE id=?1 AND lease_token=?2",
+            params![job_id, lease_token],
+        )? == 1)
+    }
+
+    pub fn request_allotment_cancel(&self, job_id: &str) -> Result<bool, LocalIndexError> {
+        Ok(self.connection.execute(
+            "UPDATE allotment_jobs SET cancel_requested=1, updated_at=CURRENT_TIMESTAMP
+             WHERE id=?1 AND status NOT IN ('COMPLETE','CANCELLED')",
+            [job_id],
+        )? == 1)
+    }
+
+    pub fn resumable_allotment_job_ids(
+        &self,
+        now_epoch_secs: u64,
+    ) -> Result<Vec<String>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id FROM allotment_jobs
+             WHERE cancel_requested=0
+               AND status IN ('CREATED','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
+               AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?1)
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([now_epoch_secs as i64], |row| row.get(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(LocalIndexError::from)
+    }
+
+    pub fn allotment_job_execution(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<AllotmentJobExecutionRow>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT id, application_id, session_id, ipo_name, registrar_id,
+                        registrar_name, official_status_url, provider_id, status,
+                        actor_member_id, cancel_requested
+                 FROM allotment_jobs WHERE id=?1",
+                [job_id],
+                |row| {
+                    Ok(AllotmentJobExecutionRow {
+                        id: row.get(0)?,
+                        application_id: row.get(1)?,
+                        session_id: row.get(2)?,
+                        ipo_name: row.get(3)?,
+                        registrar_id: row.get(4)?,
+                        registrar_name: row.get(5)?,
+                        official_status_url: row.get(6)?,
+                        provider_id: row.get(7)?,
+                        status: row.get(8)?,
+                        actor_member_id: row.get(9)?,
+                        cancel_requested: row.get::<_, i64>(10)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
     }
 
     pub fn masked_pan_for_account(

@@ -3,6 +3,7 @@
 //! only through explicit command arguments and is encrypted immediately.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -11,13 +12,29 @@ use sanket_domain::{
     CoreMember, EventEnvelope, EventPayload, FriendAccount, InvestmentSession, Money, NewEvent,
     Role,
 };
-use sanket_identity_security::{IdentityKey, Pan};
+use sanket_identity_security::{
+    IdentityKey, InMemoryKeyProvider, OsKeyringKeyProvider, Pan, RuntimeSecurityMode,
+    assert_mode_allows_provider,
+};
 use sanket_intelligence_vault::{InvestmentDecisionRequest, PlannedIpo};
 use sanket_local_index::LocalIndex;
 use sanket_member_vault::MemberVault;
 use sanket_ranking::{DevRankingAlgorithm, RankingAlgorithm};
 
 pub const DEV_KEY_ID: &str = "dev-key-1";
+pub const PRODUCTION_KEY_ID: &str = "os-keyring:v1:identity-key-v1";
+
+fn allotment_rate_limiter() -> &'static sanket_allotment::ProviderRateLimiter {
+    static LIMITER: OnceLock<sanket_allotment::ProviderRateLimiter> = OnceLock::new();
+    LIMITER.get_or_init(|| sanket_allotment::ProviderRateLimiter::new(Default::default()))
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
@@ -37,6 +54,8 @@ pub enum ServiceError {
     Secret(#[from] sanket_identity_security::IdentitySecretError),
     #[error("ranking error: {0}")]
     Ranking(#[from] sanket_ranking::RecommendationError),
+    #[error("key provider: {0}")]
+    KeyProvider(String),
     #[error("{0}")]
     Invalid(String),
 }
@@ -48,6 +67,7 @@ pub struct Application {
     device_id: String,
     vault: MemberVault,
     index: LocalIndex,
+    security_mode: RuntimeSecurityMode,
 }
 
 /// A stable per-device development key derived from the device id (NOT a
@@ -59,19 +79,117 @@ fn dev_key(device_id: &str) -> IdentityKey {
     IdentityKey::from_bytes(&bytes)
 }
 
+fn resolve_security_mode() -> RuntimeSecurityMode {
+    std::env::var("SANKET_SECURITY_MODE")
+        .map(|s| RuntimeSecurityMode::parse(&s))
+        .unwrap_or(RuntimeSecurityMode::DevelopmentSynthetic)
+}
+
+/// Reject a format-valid PAN before free-form text can be persisted into an
+/// event, SQLite projection, provider reference, or log-adjacent error path.
+fn reject_embedded_pan(field: &str, value: &str) -> Result<()> {
+    let normalized = value.to_ascii_uppercase();
+    for candidate in normalized.as_bytes().windows(10) {
+        if let Ok(candidate) = std::str::from_utf8(candidate) {
+            if Pan::parse(candidate).is_ok() {
+                return Err(ServiceError::Invalid(format!(
+                    "{field} must not contain a PAN"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Application {
     pub fn new(device_id: String, vault_root: PathBuf, index_path: PathBuf) -> Result<Self> {
+        Self::with_mode(device_id, vault_root, index_path, resolve_security_mode())
+    }
+
+    pub fn with_mode(
+        device_id: String,
+        vault_root: PathBuf,
+        index_path: PathBuf,
+        security_mode: RuntimeSecurityMode,
+    ) -> Result<Self> {
         let vault = MemberVault::open(vault_root)?;
         let index = LocalIndex::open(&index_path)?;
         Ok(Self {
             device_id,
             vault,
             index,
+            security_mode,
         })
     }
 
-    fn cipher(&self) -> sanket_identity_security::IdentityCipher {
-        sanket_identity_security::IdentityCipher::new(dev_key(&self.device_id))
+    pub fn security_mode(&self) -> RuntimeSecurityMode {
+        self.security_mode
+    }
+
+    fn identity_key(&self) -> Result<IdentityKey> {
+        match self.security_mode {
+            RuntimeSecurityMode::DevelopmentSynthetic => Ok(dev_key(&self.device_id)),
+            RuntimeSecurityMode::ProductionSecure => {
+                let os = OsKeyringKeyProvider::new();
+                assert_mode_allows_provider(self.security_mode, &os)
+                    .map_err(|e| ServiceError::KeyProvider(e.to_string()))?;
+                os.ensure_key(PRODUCTION_KEY_ID)
+                    .map_err(|e| ServiceError::KeyProvider(e.to_string()))
+            }
+        }
+    }
+
+    fn cipher(&self) -> Result<sanket_identity_security::IdentityCipher> {
+        Ok(sanket_identity_security::IdentityCipher::new(
+            self.identity_key()?,
+        ))
+    }
+
+    fn key_provider_for_sensitive(&self) -> Result<Box<dyn sanket_identity_security::KeyProvider>> {
+        match self.security_mode {
+            RuntimeSecurityMode::DevelopmentSynthetic => Ok(Box::new(InMemoryKeyProvider::new(
+                self.active_key_id(),
+                dev_key(&self.device_id),
+            ))),
+            RuntimeSecurityMode::ProductionSecure => {
+                let os = OsKeyringKeyProvider::new();
+                assert_mode_allows_provider(self.security_mode, &os)
+                    .map_err(|e| ServiceError::KeyProvider(e.to_string()))?;
+                let _ = os
+                    .ensure_key(PRODUCTION_KEY_ID)
+                    .map_err(|e| ServiceError::KeyProvider(e.to_string()))?;
+                Ok(Box::new(os))
+            }
+        }
+    }
+
+    fn active_key_id(&self) -> &'static str {
+        match self.security_mode {
+            RuntimeSecurityMode::DevelopmentSynthetic => DEV_KEY_ID,
+            RuntimeSecurityMode::ProductionSecure => PRODUCTION_KEY_ID,
+        }
+    }
+
+    fn validate_allotment_provider(&self, provider_id: &str) -> Result<()> {
+        match (self.security_mode, provider_id) {
+            (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-fixture") => Ok(()),
+            (RuntimeSecurityMode::ProductionSecure, "kfintech-live") => {
+                self.identity_key().map(|_| ())
+            }
+            (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-live") => {
+                Err(ServiceError::Invalid(
+                    "live allotment checks require PRODUCTION_SECURE with an OS keyring".into(),
+                ))
+            }
+            (RuntimeSecurityMode::ProductionSecure, "kfintech-fixture") => {
+                Err(ServiceError::Invalid(
+                    "fixture provider is restricted to DEVELOPMENT_SYNTHETIC".into(),
+                ))
+            }
+            _ => Err(ServiceError::Invalid(
+                "unsupported allotment provider".into(),
+            )),
+        }
     }
 
     fn now() -> String {
@@ -80,7 +198,7 @@ impl Application {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        format!("{:?}", secs)
+        format!("{secs}")
     }
 
     // --- onboarding ---
@@ -101,9 +219,9 @@ impl Application {
             pan: pan.clone(),
             upi_id: Some(req.upi_id.clone()),
         };
-        let envelope = self.cipher().encrypt(
+        let envelope = self.cipher()?.encrypt(
             identity_payload_to_json(&identity_payload).as_bytes(),
-            DEV_KEY_ID,
+            self.active_key_id(),
         )?;
         self.vault.store_member_identity(&member_id, &envelope)?;
 
@@ -175,9 +293,9 @@ impl Application {
             pan: pan.clone(),
             upi_id: Some(req.upi_id.clone()),
         };
-        let envelope = self.cipher().encrypt(
+        let envelope = self.cipher()?.encrypt(
             identity_payload_to_json(&identity_payload).as_bytes(),
-            DEV_KEY_ID,
+            self.active_key_id(),
         )?;
         self.vault.store_friend_identity(&friend_id, &envelope)?;
 
@@ -457,6 +575,123 @@ impl Application {
 
     // --- allotment ---
 
+    fn append_and_project(&self, event: &EventEnvelope) -> Result<()> {
+        self.vault.append_event(event)?;
+        self.index.apply_event(event)?;
+        Ok(())
+    }
+
+    /// Persist a job before any provider work starts. The background worker may
+    /// safely reconcile this after process restart.
+    pub fn enqueue_allotment_check(
+        &self,
+        req: StartAllotmentRequest,
+    ) -> Result<AllotmentJobReport> {
+        if self
+            .index
+            .list_account_ids_for_application(&req.application_id)?
+            .is_empty()
+        {
+            return Err(ServiceError::Invalid(
+                "no allocations found for application".into(),
+            ));
+        }
+        let job_id = format!("job-{}", uuid::Uuid::now_v7());
+        let registrar_id = req.registrar_id.unwrap_or_else(|| "kfintech".into());
+        let registrar_name = req.registrar_name.unwrap_or_else(|| "KFintech".into());
+        let provider_id = req.provider_id.unwrap_or_else(|| "kfintech-fixture".into());
+        let official_status_url = req
+            .official_status_url
+            .or_else(|| Some("https://ipostatus.kfintech.com".into()));
+        self.validate_allotment_provider(&provider_id)?;
+        reject_embedded_pan("IPO name", &req.ipo_name)?;
+        reject_embedded_pan("registrar id", &registrar_id)?;
+        reject_embedded_pan("registrar name", &registrar_name)?;
+        reject_embedded_pan("provider id", &provider_id)?;
+        if let Some(url) = &official_status_url {
+            reject_embedded_pan("official status URL", url)?;
+        }
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "allotment_job".into(),
+            aggregate_id: job_id.clone(),
+            aggregate_revision: 1,
+            actor_member_id: req.actor_member_id,
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::AllotmentJobCreated {
+                job_id: job_id.clone(),
+                application_id: req.application_id.clone(),
+                session_id: req.session_id,
+                ipo_name: req.ipo_name.clone(),
+                registrar_id: registrar_id.clone(),
+                registrar_name: registrar_name.clone(),
+                official_status_url: official_status_url.clone(),
+                provider_id: provider_id.clone(),
+            },
+        })?;
+        self.append_and_project(&event)?;
+        Ok(AllotmentJobReport {
+            job_id,
+            application_id: req.application_id,
+            ipo_name: req.ipo_name,
+            registrar_id,
+            registrar_name,
+            provider_id,
+            status: "CREATED".into(),
+            official_status_url,
+            accounts: Vec::new(),
+        })
+    }
+
+    /// Compatibility helper for tests/direct callers: enqueue then execute once.
+    pub fn start_allotment_check(&self, req: StartAllotmentRequest) -> Result<AllotmentJobReport> {
+        let queued = self.enqueue_allotment_check(req)?;
+        let _ = self.run_allotment_job_once(&queued.job_id)?;
+        self.get_allotment_report(&queued.job_id)
+    }
+
+    pub fn run_allotment_job_once(&self, job_id: &str) -> Result<bool> {
+        let job = self
+            .index
+            .allotment_job_execution(job_id)?
+            .ok_or_else(|| ServiceError::Invalid("allotment job not found".into()))?;
+        let token = uuid::Uuid::now_v7().to_string();
+        let now = epoch_secs();
+        if !self.index.try_acquire_allotment_lease(
+            job_id,
+            &self.device_id,
+            &token,
+            now,
+            now.saturating_add(120),
+        )? {
+            return Ok(false);
+        }
+        let req = StartAllotmentRequest {
+            application_id: job.application_id,
+            session_id: job.session_id,
+            ipo_name: job.ipo_name,
+            actor_member_id: job.actor_member_id,
+            registrar_id: Some(job.registrar_id),
+            registrar_name: Some(job.registrar_name),
+            official_status_url: job.official_status_url,
+            provider_id: Some(job.provider_id),
+        };
+        let result = self.execute_allotment_check(req, job_id.to_owned());
+        let _ = self.index.release_allotment_lease(job_id, &token);
+        result.map(|_| true)
+    }
+
+    pub fn resumable_allotment_job_ids(&self) -> Result<Vec<String>> {
+        Ok(self.index.resumable_allotment_job_ids(epoch_secs())?)
+    }
+
+    pub fn cancel_allotment_job(&self, job_id: &str) -> Result<bool> {
+        Ok(self.index.request_allotment_cancel(job_id)?)
+    }
+
     pub fn list_allotment_candidates(&self) -> Result<Vec<AllotmentCandidateRow>> {
         Ok(self
             .index
@@ -480,8 +715,11 @@ impl Application {
             .collect())
     }
 
-    /// Start + run fixture allotment checks sequentially for one application.
-    pub fn start_allotment_check(&self, req: StartAllotmentRequest) -> Result<AllotmentJobReport> {
+    fn execute_allotment_check(
+        &self,
+        req: StartAllotmentRequest,
+        job_id: String,
+    ) -> Result<AllotmentJobReport> {
         let accounts = self
             .index
             .list_account_ids_for_application(&req.application_id)?;
@@ -491,10 +729,12 @@ impl Application {
             ));
         }
 
-        let job_id = format!("job-{}", uuid::Uuid::now_v7());
         let registrar_id = req.registrar_id.unwrap_or_else(|| "kfintech".into());
         let registrar_name = req.registrar_name.unwrap_or_else(|| "KFintech".into());
-        let provider_id = "kfintech-fixture".to_owned();
+        let provider_id = req
+            .provider_id
+            .clone()
+            .unwrap_or_else(|| "kfintech-fixture".to_owned());
         let official_url = req
             .official_status_url
             .unwrap_or_else(|| "https://ipostatus.kfintech.com".into());
@@ -510,27 +750,7 @@ impl Application {
         )
         .map_err(|e| ServiceError::Invalid(e.to_string()))?;
 
-        let mut events = Vec::new();
-        events.push(EventEnvelope::seal(NewEvent {
-            event_id: String::new(),
-            aggregate_type: "allotment_job".into(),
-            aggregate_id: job_id.clone(),
-            aggregate_revision: 1,
-            actor_member_id: req.actor_member_id.clone(),
-            device_id: self.device_id.clone(),
-            occurred_at: Self::now(),
-            app_version: env!("CARGO_PKG_VERSION").into(),
-            previous_event_hash: None,
-            payload: EventPayload::AllotmentJobCreated {
-                job_id: job_id.clone(),
-                application_id: req.application_id.clone(),
-                session_id: req.session_id.clone(),
-                ipo_name: req.ipo_name.clone(),
-                registrar_id: registrar_id.clone(),
-                provider_id: provider_id.clone(),
-            },
-        })?);
-        events.push(EventEnvelope::seal(NewEvent {
+        let running_event = EventEnvelope::seal(NewEvent {
             event_id: String::new(),
             aggregate_type: "allotment_job".into(),
             aggregate_id: job_id.clone(),
@@ -544,19 +764,78 @@ impl Application {
                 job_id: job_id.clone(),
                 status: "RUNNING".into(),
             },
-        })?);
+        })?;
+        self.append_and_project(&running_event)?;
 
-        let provider = sanket_allotment::FixtureKfintechProvider;
-        let key_provider = sanket_identity_security::InMemoryKeyProvider::new(
-            DEV_KEY_ID,
-            dev_key(&self.device_id),
-        );
-        let mut sensitive = sanket_identity_security::SensitiveIdentityService::new(key_provider);
+        let fixture = sanket_allotment::FixtureKfintechProvider;
+        let live = sanket_allotment::LiveKfintechProvider::new();
+        let use_live = provider_id == "kfintech-live";
+        let key_provider = self.key_provider_for_sensitive()?;
+        let mut sensitive =
+            sanket_identity_security::SensitiveIdentityService::new_boxed(key_provider);
         let mut report_rows = Vec::new();
         let mut rev = 3u64;
+        let policy = sanket_allotment::ProviderRatePolicy::default();
+        let mut cancelled = false;
 
         for account_id in &accounts {
-            let attempt_id = format!("att-{}", uuid::Uuid::now_v7());
+            if self
+                .index
+                .allotment_job_execution(&job_id)?
+                .is_some_and(|row| row.cancel_requested)
+            {
+                cancelled = true;
+                break;
+            }
+            let previous = self.index.allotment_attempt(&job_id, account_id)?;
+            let now = epoch_secs();
+            let retry_due = previous
+                .as_ref()
+                .and_then(|a| a.next_retry_at.as_deref())
+                .and_then(|s| s.parse::<u64>().ok())
+                .is_none_or(|at| at <= now);
+            let paused = previous.as_ref().is_some_and(|a| {
+                matches!(
+                    a.status.as_str(),
+                    "ALLOTTED"
+                        | "NOT_ALLOTTED"
+                        | "NOT_FOUND"
+                        | "MANUAL_RESULT"
+                        | "NEEDS_HUMAN_VERIFICATION"
+                        | "UNKNOWN"
+                ) || a.attempt_count >= policy.max_attempts
+                    || !retry_due
+            });
+            if paused {
+                let a = previous.expect("checked above");
+                let (label, kind) = self.index.display_label_for_account(account_id)?;
+                let masked = self
+                    .index
+                    .masked_pan_for_account(account_id)?
+                    .unwrap_or_else(|| "[MASKED]".into());
+                report_rows.push(AllotmentReportRow {
+                    attempt_id: a.id,
+                    account_id: account_id.clone(),
+                    display_name: label,
+                    account_kind: kind,
+                    masked_pan: masked,
+                    status: a.status,
+                    allotted_lots: a.allotted_lots.map(|v| v as u32),
+                    allotted_shares: a.allotted_shares.map(|v| v as u64),
+                    provider_id: provider_id.clone(),
+                    source: a.source,
+                });
+                continue;
+            }
+            let attempt_id = previous
+                .as_ref()
+                .map(|a| a.id.clone())
+                .unwrap_or_else(|| format!("att-{}", uuid::Uuid::now_v7()));
+            let attempt_count = previous
+                .as_ref()
+                .map(|a| a.attempt_count.saturating_add(1))
+                .unwrap_or(1);
+            allotment_rate_limiter().wait_turn(&provider_id);
             let envelope = self
                 .vault
                 .load_member_identity(account_id)
@@ -592,22 +871,34 @@ impl Application {
                                 ipo_name: req.ipo_name.clone(),
                             },
                         };
-                        match sanket_allotment::AllotmentProvider::check_allotment(
-                            &provider, &ctx, &pan,
-                        ) {
+                        match if use_live {
+                            sanket_allotment::AllotmentProvider::check_allotment(&live, &ctx, &pan)
+                        } else {
+                            sanket_allotment::AllotmentProvider::check_allotment(
+                                &fixture, &ctx, &pan,
+                            )
+                        } {
                             Ok(r) => Ok((
                                 r.status.as_str().to_owned(),
                                 r.allotted_lots,
                                 r.allotted_shares,
                                 r.provider_reference,
-                                "FIXTURE".to_owned(),
+                                if use_live {
+                                    "AUTOMATED".to_owned()
+                                } else {
+                                    "FIXTURE".to_owned()
+                                },
                             )),
                             Err(e) => Ok((
                                 e.to_status().as_str().to_owned(),
                                 None,
                                 None,
                                 None,
-                                "FIXTURE".to_owned(),
+                                if use_live {
+                                    "AUTOMATED".to_owned()
+                                } else {
+                                    "FIXTURE".to_owned()
+                                },
                             )),
                         }
                     },
@@ -615,33 +906,80 @@ impl Application {
                 .map_err(|e| ServiceError::Invalid(e.to_string()))?
                 .map_err(ServiceError::Invalid)?;
 
-            // Audit only — no PAN in event.
+            // Persist purpose-scoped access audit without sensitive values.
             if let Some(audit) = sensitive.take_last_audit() {
-                let _ = audit; // purpose-scoped access already audited in-memory
+                let audit_event = EventEnvelope::seal(NewEvent {
+                    event_id: String::new(),
+                    aggregate_type: "sensitive_identity".into(),
+                    aggregate_id: account_id.clone(),
+                    aggregate_revision: attempt_count as u64,
+                    actor_member_id: req.actor_member_id.clone(),
+                    device_id: self.device_id.clone(),
+                    occurred_at: audit.occurred_at,
+                    app_version: env!("CARGO_PKG_VERSION").into(),
+                    previous_event_hash: None,
+                    payload: EventPayload::SensitiveIdentityAccessed {
+                        account_id: audit.account_id,
+                        purpose: audit.purpose,
+                    },
+                })?;
+                self.append_and_project(&audit_event)?;
             }
 
-            events.push(EventEnvelope::seal(NewEvent {
+            let retryable = matches!(
+                status.as_str(),
+                "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "RETRYABLE_ERROR" | "PENDING"
+            );
+            let next_retry_at = if retryable && attempt_count < policy.max_attempts {
+                Some(
+                    epoch_secs()
+                        .saturating_add(policy.next_backoff_ms(attempt_count) / 1_000)
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            let safe_message = match status.as_str() {
+                "RATE_LIMITED" => Some("Provider rate limit; retry scheduled".into()),
+                "PROVIDER_UNAVAILABLE" => Some("Provider unavailable; retry scheduled".into()),
+                "RETRYABLE_ERROR" => Some("Temporary provider error; retry scheduled".into()),
+                "NEEDS_HUMAN_VERIFICATION" => {
+                    Some("Official registrar verification is required".into())
+                }
+                "UNKNOWN" => Some("Provider response could not be confirmed".into()),
+                _ => None,
+            };
+            let attempt_event = EventEnvelope::seal(NewEvent {
                 event_id: String::new(),
                 aggregate_type: "allotment_attempt".into(),
                 aggregate_id: attempt_id.clone(),
-                aggregate_revision: 1,
+                aggregate_revision: attempt_count as u64,
                 actor_member_id: req.actor_member_id.clone(),
                 device_id: self.device_id.clone(),
                 occurred_at: Self::now(),
                 app_version: env!("CARGO_PKG_VERSION").into(),
                 previous_event_hash: None,
-                payload: EventPayload::AllotmentAttemptRecorded {
+                payload: EventPayload::AllotmentAttemptStateUpdated {
                     attempt_id: attempt_id.clone(),
                     job_id: job_id.clone(),
                     account_id: account_id.clone(),
                     status: status.clone(),
+                    attempt_count,
                     allotted_lots: lots,
                     allotted_shares: shares,
                     source: source.clone(),
                     provider_reference: pref.clone(),
+                    safe_message,
+                    last_attempt_at: epoch_secs().to_string(),
+                    next_retry_at,
                 },
-            })?);
+            })?;
+            self.append_and_project(&attempt_event)?;
             rev += 1;
+            eprintln!(
+                "allotment provider={} job_id={} account_id={} attempt={} state={}",
+                provider_id, job_id, account_id, attempt_count, status
+            );
 
             let (label, kind) = self.index.display_label_for_account(account_id)?;
             report_rows.push(AllotmentReportRow {
@@ -658,7 +996,28 @@ impl Application {
             });
         }
 
-        let final_status = if report_rows.iter().all(|r| {
+        let mut has_retryable = false;
+        for account_id in &accounts {
+            if let Some(a) = self.index.allotment_attempt(&job_id, account_id)? {
+                if matches!(
+                    a.status.as_str(),
+                    "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "RETRYABLE_ERROR" | "PENDING"
+                ) && a.attempt_count < policy.max_attempts
+                {
+                    has_retryable = true;
+                }
+            }
+        }
+        let final_status = if cancelled {
+            "CANCELLED"
+        } else if report_rows
+            .iter()
+            .any(|r| r.status == "NEEDS_HUMAN_VERIFICATION")
+        {
+            "NEEDS_HUMAN_VERIFICATION"
+        } else if has_retryable || report_rows.len() < accounts.len() {
+            "PARTIALLY_COMPLETE"
+        } else if report_rows.iter().all(|r| {
             matches!(
                 r.status.as_str(),
                 "ALLOTTED" | "NOT_ALLOTTED" | "NOT_FOUND" | "MANUAL_RESULT"
@@ -666,9 +1025,9 @@ impl Application {
         }) {
             "COMPLETE"
         } else {
-            "PARTIALLY_COMPLETE"
+            "COMPLETE_WITH_UNCONFIRMED"
         };
-        events.push(EventEnvelope::seal(NewEvent {
+        let final_event = EventEnvelope::seal(NewEvent {
             event_id: String::new(),
             aggregate_type: "allotment_job".into(),
             aggregate_id: job_id.clone(),
@@ -682,12 +1041,8 @@ impl Application {
                 job_id: job_id.clone(),
                 status: final_status.into(),
             },
-        })?);
-
-        for event in &events {
-            self.vault.append_event(event)?;
-            self.index.apply_event(event)?;
-        }
+        })?;
+        self.append_and_project(&final_event)?;
 
         let _ = job; // domain object validated construction
         Ok(AllotmentJobReport {
@@ -704,13 +1059,11 @@ impl Application {
     }
 
     pub fn get_allotment_report(&self, job_id: &str) -> Result<AllotmentJobReport> {
-        let jobs = self.index.list_allotment_jobs()?;
-        let job = jobs
-            .into_iter()
-            .find(|(id, ..)| id == job_id)
+        let job = self
+            .index
+            .allotment_job_execution(job_id)?
             .ok_or_else(|| ServiceError::Invalid("allotment job not found".into()))?;
-        let (id, application_id, _session_id, ipo_name, registrar_id, status) = job;
-        let attempts = self.index.list_allotment_attempts(&id)?;
+        let attempts = self.index.list_allotment_attempts(&job.id)?;
         let mut accounts = Vec::new();
         for (attempt_id, account_id, st, lots, shares, source) in attempts {
             let (label, kind) = self.index.display_label_for_account(&account_id)?;
@@ -727,20 +1080,252 @@ impl Application {
                 status: st,
                 allotted_lots: lots.map(|v| v as u32),
                 allotted_shares: shares.map(|v| v as u64),
-                provider_id: "kfintech-fixture".into(),
+                provider_id: job.provider_id.clone(),
                 source,
             });
         }
         Ok(AllotmentJobReport {
-            job_id: id,
-            application_id,
-            ipo_name,
-            registrar_id,
-            registrar_name: "KFintech".into(),
-            provider_id: "kfintech-fixture".into(),
-            status,
-            official_status_url: Some("https://ipostatus.kfintech.com".into()),
+            job_id: job.id,
+            application_id: job.application_id,
+            ipo_name: job.ipo_name,
+            registrar_id: job.registrar_id,
+            registrar_name: job.registrar_name,
+            provider_id: job.provider_id,
+            status: job.status,
+            official_status_url: job.official_status_url,
             accounts,
+        })
+    }
+
+    pub fn record_manual_allotment_result(
+        &self,
+        req: ManualAllotmentRequest,
+    ) -> Result<AllotmentReportRow> {
+        let job = self
+            .index
+            .allotment_job_execution(&req.job_id)?
+            .ok_or_else(|| ServiceError::Invalid("allotment job not found".into()))?;
+        if job.actor_member_id != req.actor_member_id {
+            return Err(ServiceError::Invalid(
+                "manual result actor does not own the allotment job".into(),
+            ));
+        }
+        let account_ids = self
+            .index
+            .list_account_ids_for_application(&job.application_id)?;
+        if !account_ids
+            .iter()
+            .any(|account_id| account_id == &req.account_id)
+        {
+            return Err(ServiceError::Invalid(
+                "manual result account is not part of the allotment job".into(),
+            ));
+        }
+        if let Some(note) = &req.note {
+            reject_embedded_pan("manual result note", note)?;
+        }
+        let previous = self.index.allotment_attempt(&req.job_id, &req.account_id)?;
+        let attempt_id = previous
+            .as_ref()
+            .map(|attempt| attempt.id.clone())
+            .unwrap_or_else(|| format!("att-{}", uuid::Uuid::now_v7()));
+        let attempt_count = previous
+            .as_ref()
+            .map(|attempt| attempt.attempt_count.saturating_add(1))
+            .unwrap_or(1);
+        let status = if req.explicit_not_allotted {
+            "NOT_ALLOTTED"
+        } else if req.allotted_shares.unwrap_or(0) > 0 || req.allotted_lots.unwrap_or(0) > 0 {
+            "ALLOTTED"
+        } else {
+            "MANUAL_RESULT"
+        };
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "allotment_attempt".into(),
+            aggregate_id: attempt_id.clone(),
+            aggregate_revision: 1,
+            actor_member_id: req.actor_member_id.clone(),
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::AllotmentAttemptStateUpdated {
+                attempt_id: attempt_id.clone(),
+                job_id: req.job_id.clone(),
+                account_id: req.account_id.clone(),
+                status: status.into(),
+                attempt_count,
+                allotted_lots: req.allotted_lots,
+                allotted_shares: req.allotted_shares,
+                source: "MANUAL".into(),
+                provider_reference: req.note.clone(),
+                safe_message: Some("Manually recorded by an authorized local actor".into()),
+                last_attempt_at: epoch_secs().to_string(),
+                next_retry_at: None,
+            },
+        })?;
+        self.append_and_project(&event)?;
+        let complete = account_ids.iter().all(|account_id| {
+            self.index
+                .allotment_attempt(&req.job_id, account_id)
+                .ok()
+                .flatten()
+                .is_some_and(|attempt| {
+                    matches!(
+                        attempt.status.as_str(),
+                        "ALLOTTED" | "NOT_ALLOTTED" | "NOT_FOUND" | "MANUAL_RESULT"
+                    )
+                })
+        });
+        let status_event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "allotment_job".into(),
+            aggregate_id: req.job_id.clone(),
+            aggregate_revision: attempt_count as u64 + 2,
+            actor_member_id: req.actor_member_id.clone(),
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::AllotmentJobStatusChanged {
+                job_id: req.job_id.clone(),
+                status: if complete {
+                    "COMPLETE".into()
+                } else {
+                    "COMPLETE_WITH_UNCONFIRMED".into()
+                },
+            },
+        })?;
+        self.append_and_project(&status_event)?;
+        let (label, kind) = self.index.display_label_for_account(&req.account_id)?;
+        let masked = self
+            .index
+            .masked_pan_for_account(&req.account_id)?
+            .unwrap_or_else(|| "[MASKED]".into());
+        Ok(AllotmentReportRow {
+            attempt_id,
+            account_id: req.account_id,
+            display_name: label,
+            account_kind: kind,
+            masked_pan: masked,
+            status: status.into(),
+            allotted_lots: req.allotted_lots,
+            allotted_shares: req.allotted_shares,
+            provider_id: "manual".into(),
+            source: "MANUAL".into(),
+        })
+    }
+
+    pub fn estimate_profit(&self, req: EstimateProfitRequest) -> Result<EstimatedProfitDto> {
+        reject_embedded_pan("profit source", &req.source)?;
+        reject_embedded_pan("profit as-of value", &req.as_of)?;
+        if let Some(note) = &req.note {
+            reject_embedded_pan("profit note", note)?;
+        }
+        if !self
+            .index
+            .list_account_ids_for_application(&req.application_id)?
+            .iter()
+            .any(|account_id| account_id == &req.account_id)
+        {
+            return Err(ServiceError::Invalid(
+                "estimated-profit account is not part of the application".into(),
+            ));
+        }
+        let basis = match req.basis.to_ascii_uppercase().as_str() {
+            "ACTUAL_LISTING_PRICE" => sanket_allotment::ProfitPriceBasis::ActualListingPrice,
+            "CURRENT_MARKET_PRICE" => sanket_allotment::ProfitPriceBasis::CurrentMarketPrice,
+            "OWNER_EXPECTED_PRICE" => sanket_allotment::ProfitPriceBasis::OwnerExpectedPrice,
+            "PUBLIC_ESTIMATE" => sanket_allotment::ProfitPriceBasis::PublicEstimate,
+            _ => sanket_allotment::ProfitPriceBasis::Unavailable,
+        };
+        if !matches!(
+            basis,
+            sanket_allotment::ProfitPriceBasis::Unavailable
+                | sanket_allotment::ProfitPriceBasis::OwnerExpectedPrice
+        ) && (req.source.trim().is_empty() || req.as_of.trim().is_empty())
+        {
+            return Err(ServiceError::Invalid(
+                "external price bases require source and as-of provenance".into(),
+            ));
+        }
+        let est = if matches!(basis, sanket_allotment::ProfitPriceBasis::Unavailable)
+            || req.reference_price_paise.is_none()
+            || req.issue_price_paise.is_none()
+        {
+            sanket_allotment::EstimatedProfit::unavailable(req.allotted_shares)
+        } else {
+            sanket_allotment::EstimatedProfit::compute(
+                basis,
+                req.allotted_shares,
+                Money::from_paise(req.reference_price_paise.unwrap_or(0)),
+                Money::from_paise(req.issue_price_paise.unwrap_or(0)),
+                req.note.clone(),
+            )
+        };
+        let dto = EstimatedProfitDto {
+            basis: est.basis.as_str().into(),
+            reference_price_paise: est.reference_price_paise,
+            issue_price_paise: est.issue_price_paise,
+            allotted_shares: est.allotted_shares,
+            estimated_profit_paise: est.estimated_profit_paise,
+            note: est.note.clone(),
+            is_realized: false,
+        };
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "estimated_profit".into(),
+            aggregate_id: format!("{}:{}", req.application_id, req.account_id),
+            aggregate_revision: 1,
+            actor_member_id: req.actor_member_id,
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::EstimatedProfitUpdated {
+                application_id: req.application_id,
+                account_id: req.account_id,
+                basis: dto.basis.clone(),
+                reference_price_paise: dto.reference_price_paise,
+                issue_price_paise: dto.issue_price_paise,
+                allotted_shares: dto.allotted_shares,
+                estimated_profit_paise: dto.estimated_profit_paise,
+                provenance: if req.source.trim().is_empty() {
+                    None
+                } else {
+                    Some(req.source)
+                },
+                observed_at: req.as_of,
+            },
+        })?;
+        self.append_and_project(&event)?;
+        Ok(dto)
+    }
+
+    pub fn security_status(&self) -> Result<SecurityStatusDto> {
+        let keyring_ready = match self.security_mode {
+            RuntimeSecurityMode::DevelopmentSynthetic => false,
+            RuntimeSecurityMode::ProductionSecure => self.identity_key().is_ok(),
+        };
+        Ok(SecurityStatusDto {
+            mode: self.security_mode.as_str().into(),
+            key_provider: match self.security_mode {
+                RuntimeSecurityMode::DevelopmentSynthetic => "in-memory-dev".into(),
+                RuntimeSecurityMode::ProductionSecure => "os-keyring".into(),
+            },
+            real_pan_allowed: keyring_ready,
+            os_keyring_release_blocker: !keyring_ready,
+            blocker: if keyring_ready {
+                None
+            } else if matches!(
+                self.security_mode,
+                RuntimeSecurityMode::DevelopmentSynthetic
+            ) {
+                Some("Development synthetic mode: real PAN is disabled".into())
+            } else {
+                Some("OS keyring unavailable, locked, or corrupted".into())
+            },
         })
     }
 }
@@ -917,6 +1502,7 @@ pub struct StartAllotmentRequest {
     pub registrar_id: Option<String>,
     pub registrar_name: Option<String>,
     pub official_status_url: Option<String>,
+    pub provider_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -944,4 +1530,50 @@ pub struct AllotmentJobReport {
     pub status: String,
     pub official_status_url: Option<String>,
     pub accounts: Vec<AllotmentReportRow>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManualAllotmentRequest {
+    pub job_id: String,
+    pub account_id: String,
+    pub actor_member_id: String,
+    pub allotted_lots: Option<u32>,
+    pub allotted_shares: Option<u64>,
+    pub explicit_not_allotted: bool,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EstimateProfitRequest {
+    pub application_id: String,
+    pub account_id: String,
+    pub actor_member_id: String,
+    pub basis: String,
+    pub allotted_shares: u64,
+    pub reference_price_paise: Option<i64>,
+    pub issue_price_paise: Option<i64>,
+    pub source: String,
+    pub as_of: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EstimatedProfitDto {
+    pub basis: String,
+    pub reference_price_paise: Option<i64>,
+    pub issue_price_paise: Option<i64>,
+    pub allotted_shares: u64,
+    pub estimated_profit_paise: Option<i64>,
+    pub note: Option<String>,
+    /// Always false for estimated path — realized profit is separate.
+    pub is_realized: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SecurityStatusDto {
+    pub mode: String,
+    pub key_provider: String,
+    pub real_pan_allowed: bool,
+    pub os_keyring_release_blocker: bool,
+    pub blocker: Option<String>,
 }

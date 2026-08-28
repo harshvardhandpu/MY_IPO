@@ -1,16 +1,40 @@
 [package]
 name = "sanket-identity-security"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.85"
-license = "UNLICENSED"
-publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
+base64.workspace = true
 chacha20poly1305.workspace = true
+keyring.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+
+# Pass-through feature names so `#[cfg(feature = "...")]` detection in
+# key_provider.rs is well-formed and the backend matrix resolves correctly.
+# `default` opts into the durable platform store for the current target so a
+# plain workspace build always links a real backend (never the keyring mock).
+[features]
+default = []
+apple-native = ["keyring/apple-native"]
+linux-native-sync-persistent = ["keyring/linux-native-sync-persistent"]
+windows-native = ["keyring/windows-native"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["linux-native-sync-persistent", "crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }

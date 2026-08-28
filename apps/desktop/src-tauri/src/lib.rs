@@ -1,4 +1,5 @@
 pub mod service;
+pub mod worker;
 
 use std::path::PathBuf;
 
@@ -7,8 +8,9 @@ use tauri::Manager;
 
 use service::{
     AddFriendRequest, AddFriendResponse, AllotmentCandidateRow, AllotmentJobReport, Application,
-    CheckRequest, CheckResponse, Dashboard, FriendRow, MemberRow, OnboardMemberRequest,
-    OnboardMemberResponse, StartAllotmentRequest, SubmitRequest, SubmitResponse,
+    CheckRequest, CheckResponse, Dashboard, EstimateProfitRequest, EstimatedProfitDto, FriendRow,
+    ManualAllotmentRequest, MemberRow, OnboardMemberRequest, OnboardMemberResponse,
+    SecurityStatusDto, StartAllotmentRequest, SubmitRequest, SubmitResponse,
 };
 
 #[derive(Clone, Debug)]
@@ -18,6 +20,7 @@ pub struct AppState {
     projection_schema_version: u32,
     vault_root: PathBuf,
     index_path: PathBuf,
+    worker: Option<worker::AllotmentWorkerHandle>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -52,7 +55,13 @@ impl AppState {
             projection_schema_version,
             vault_root,
             index_path,
+            worker: None,
         }
+    }
+
+    pub fn with_worker(mut self, worker: worker::AllotmentWorkerHandle) -> Self {
+        self.worker = Some(worker);
+        self
     }
 
     fn application(&self) -> std::result::Result<Application, String> {
@@ -70,7 +79,14 @@ impl AppState {
             device_id: self.device_id.clone(),
             projection_schema_version: self.projection_schema_version,
             sync_status: sanket_domain::SyncStatus::Pending,
-            os_keyring_status: "DEV IN-MEMORY PROVIDER; PRODUCTION OS KEYRING DEFERRED",
+            os_keyring_status: if std::env::var("SANKET_SECURITY_MODE")
+                .map(|s| s.to_ascii_uppercase().contains("PRODUCTION"))
+                .unwrap_or(false)
+            {
+                "OS KEYRING (PRODUCTION_SECURE)"
+            } else {
+                "DEV SYNTHETIC / IN-MEMORY — OS KEYRING REQUIRED BEFORE REAL PAN"
+            },
         }
     }
 }
@@ -175,9 +191,21 @@ fn start_allotment_check(
     state: tauri::State<'_, AppState>,
     request: StartAllotmentRequest,
 ) -> Result<AllotmentJobReport, String> {
+    let report = state
+        .application()?
+        .enqueue_allotment_check(request)
+        .map_err(|e| e.to_string())?;
+    if let Some(worker) = &state.worker {
+        worker.notify();
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+fn cancel_allotment_job(state: tauri::State<'_, AppState>, job_id: String) -> Result<bool, String> {
     state
         .application()?
-        .start_allotment_check(request)
+        .cancel_allotment_job(&job_id)
         .map_err(|e| e.to_string())
 }
 
@@ -192,6 +220,36 @@ fn get_allotment_report(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn record_manual_allotment(
+    state: tauri::State<'_, AppState>,
+    request: ManualAllotmentRequest,
+) -> Result<service::AllotmentReportRow, String> {
+    state
+        .application()?
+        .record_manual_allotment_result(request)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn estimate_profit(
+    state: tauri::State<'_, AppState>,
+    request: EstimateProfitRequest,
+) -> Result<EstimatedProfitDto, String> {
+    state
+        .application()?
+        .estimate_profit(request)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_security_status(state: tauri::State<'_, AppState>) -> Result<SecurityStatusDto, String> {
+    state
+        .application()?
+        .security_status()
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -203,12 +261,19 @@ pub fn run() {
             let vault_root = app_data_dir.join("member-vault");
             let local_index = sanket_local_index::LocalIndex::open(&index_path)?;
             let schema_version = local_index.schema_version()?;
-            app.manage(AppState::build(
-                settings.device_id,
-                schema_version,
-                vault_root,
-                index_path,
-            ));
+            let mode = std::env::var("SANKET_SECURITY_MODE")
+                .map(|value| sanket_identity_security::RuntimeSecurityMode::parse(&value))
+                .unwrap_or(sanket_identity_security::RuntimeSecurityMode::DevelopmentSynthetic);
+            let worker = worker::spawn_allotment_worker(
+                settings.device_id.clone(),
+                vault_root.clone(),
+                index_path.clone(),
+                mode,
+            );
+            app.manage(
+                AppState::build(settings.device_id, schema_version, vault_root, index_path)
+                    .with_worker(worker),
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -223,7 +288,11 @@ pub fn run() {
             get_dashboard,
             list_allotment_candidates,
             start_allotment_check,
-            get_allotment_report
+            get_allotment_report,
+            cancel_allotment_job,
+            record_manual_allotment,
+            estimate_profit,
+            get_security_status
         ])
         .run(tauri::generate_context!())
         .expect("Sanket IPO desktop runtime failed");

@@ -4,7 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use sanket_desktop_lib::service::{
-    Application, OnboardMemberRequest, StartAllotmentRequest, SubmitIpoInput, SubmitRequest,
+    Application, ManualAllotmentRequest, OnboardMemberRequest, StartAllotmentRequest,
+    SubmitIpoInput, SubmitRequest,
 };
 use uuid::Uuid;
 
@@ -52,21 +53,67 @@ fn allotment_fixture_never_persists_plaintext_pan() {
 
     let apps = app.list_allotment_candidates().unwrap();
     assert_eq!(apps.len(), 1);
-    let report = app
-        .start_allotment_check(StartAllotmentRequest {
+    let queued = app
+        .enqueue_allotment_check(StartAllotmentRequest {
             application_id: apps[0].application_id.clone(),
             session_id: apps[0].session_id.clone(),
             ipo_name: apps[0].ipo_name.clone(),
-            actor_member_id: member_id,
+            actor_member_id: member_id.clone(),
             registrar_id: Some("kfintech".into()),
             registrar_name: Some("KFintech".into()),
             official_status_url: None,
+            provider_id: None,
         })
         .unwrap();
+
+    assert_eq!(queued.status, "CREATED");
+    assert!(queued.accounts.is_empty());
+    assert!(app.run_allotment_job_once(&queued.job_id).unwrap());
+    let report = app.get_allotment_report(&queued.job_id).unwrap();
 
     assert_eq!(report.accounts.len(), 1);
     assert_eq!(report.accounts[0].status, "ALLOTTED");
     assert!(!report.accounts[0].masked_pan.contains("1234"));
+
+    let manual_err = app
+        .record_manual_allotment_result(ManualAllotmentRequest {
+            job_id: queued.job_id.clone(),
+            account_id: report.accounts[0].account_id.clone(),
+            actor_member_id: member_id.clone(),
+            allotted_lots: None,
+            allotted_shares: None,
+            explicit_not_allotted: false,
+            note: Some(FULL_PAN.into()),
+        })
+        .expect_err("manual provenance must reject a PAN before persisting");
+    assert!(manual_err.to_string().contains("must not contain a PAN"));
+
+    let wrong_actor_err = app
+        .record_manual_allotment_result(ManualAllotmentRequest {
+            job_id: queued.job_id.clone(),
+            account_id: report.accounts[0].account_id.clone(),
+            actor_member_id: "different-member".into(),
+            allotted_lots: None,
+            allotted_shares: None,
+            explicit_not_allotted: false,
+            note: None,
+        })
+        .expect_err("manual provenance must reject the wrong actor before persisting");
+    assert!(wrong_actor_err.to_string().contains("does not own"));
+
+    let live_err = app
+        .enqueue_allotment_check(StartAllotmentRequest {
+            application_id: apps[0].application_id.clone(),
+            session_id: apps[0].session_id.clone(),
+            ipo_name: apps[0].ipo_name.clone(),
+            actor_member_id: "member".into(),
+            registrar_id: Some("kfintech".into()),
+            registrar_name: Some("KFintech".into()),
+            official_status_url: None,
+            provider_id: Some("kfintech-live".into()),
+        })
+        .expect_err("development synthetic mode must not invoke live KFintech");
+    assert!(live_err.to_string().contains("PRODUCTION_SECURE"));
 
     let report_json = serde_json::to_string(&report).unwrap();
     assert!(

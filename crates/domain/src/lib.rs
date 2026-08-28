@@ -112,6 +112,10 @@ pub enum EventPayload {
         session_id: String,
         ipo_name: String,
         registrar_id: String,
+        #[serde(default)]
+        registrar_name: String,
+        #[serde(default)]
+        official_status_url: Option<String>,
         provider_id: String,
     },
     /// Job status advanced.
@@ -129,6 +133,43 @@ pub enum EventPayload {
         allotted_shares: Option<u64>,
         source: String,
         provider_reference: Option<String>,
+    },
+    /// Durable retry/progress state for one account attempt (never PAN).
+    AllotmentAttemptStateUpdated {
+        attempt_id: String,
+        job_id: String,
+        account_id: String,
+        status: String,
+        attempt_count: u32,
+        allotted_lots: Option<u32>,
+        allotted_shares: Option<u64>,
+        source: String,
+        provider_reference: Option<String>,
+        safe_message: Option<String>,
+        last_attempt_at: String,
+        next_retry_at: Option<String>,
+    },
+    /// Public registrar issue mapping discovered or revalidated (never PAN).
+    AllotmentProviderDiscovered {
+        application_id: String,
+        registrar_id: String,
+        provider_id: String,
+        provider_issue_id: String,
+        ipo_name: String,
+        official_status_url: String,
+        last_verified_at: String,
+    },
+    /// Explicit estimated-profit basis; this is never realized profit.
+    EstimatedProfitUpdated {
+        application_id: String,
+        account_id: String,
+        basis: String,
+        reference_price_paise: Option<i64>,
+        issue_price_paise: Option<i64>,
+        allotted_shares: u64,
+        estimated_profit_paise: Option<i64>,
+        provenance: Option<String>,
+        observed_at: String,
     },
 }
 
@@ -150,6 +191,9 @@ impl EventPayload {
             Self::AllotmentJobCreated { .. } => "ALLOTMENT_JOB_CREATED",
             Self::AllotmentJobStatusChanged { .. } => "ALLOTMENT_JOB_STATUS_CHANGED",
             Self::AllotmentAttemptRecorded { .. } => "ALLOTMENT_ATTEMPT_RECORDED",
+            Self::AllotmentAttemptStateUpdated { .. } => "ALLOTMENT_ATTEMPT_STATE_UPDATED",
+            Self::AllotmentProviderDiscovered { .. } => "ALLOTMENT_PROVIDER_DISCOVERED",
+            Self::EstimatedProfitUpdated { .. } => "ESTIMATED_PROFIT_UPDATED",
         }
     }
 }
@@ -264,6 +308,18 @@ impl EventEnvelope {
     /// The event payload, for projection/replay.
     pub fn payload(&self) -> &EventPayload {
         &self.payload
+    }
+
+    pub fn actor_member_id(&self) -> &str {
+        &self.actor_member_id
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    pub fn occurred_at(&self) -> &str {
+        &self.occurred_at
     }
 
     pub fn verify_integrity(&self) -> Result<bool, EventError> {
