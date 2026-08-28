@@ -19,6 +19,7 @@ apps/desktop/src-tauri/target/
 
 # Local application data (never commit)
 .local/
+.tmp-review/
 *.sqlite
 *.sqlite3
 *.db
