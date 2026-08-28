@@ -1,7 +1,7 @@
 # Status: Phase 3C Multi-Registrar Allotment
 
 - Gate 1 — Product: **APPROVED AND LOCKED**
-- Gate 2 — Live registrar behavior + capability validation: pending
+- Gate 2 — Live registrar behavior + capability validation: **APPROVED AND LOCKED**
 - Gate 3 — Program Design: pending
 - Gate 4 — Slice plan: pending
 
@@ -15,6 +15,18 @@
 - Result provenance: **LOCKED**
 - Restart/recovery behavior: **LOCKED**
 - Real PAN authorization: **NOT YET GRANTED**
+
+## Gate 2 research record
+
+- Approval: **APPROVED AND LOCKED**
+- Verdict: **PASS WITH CHANGES REQUIRED**
+- KFintech: **MAJOR UPDATE REQUIRED**
+- Bigshare: **NOT IMPLEMENTED / BLOCKED BY HUMAN VERIFICATION**
+- MUFG Intime: **NOT IMPLEMENTED**
+- Provider health model: **SUFFICIENT**
+- Capability/discovery contract: **GATE 3 DESIGN REQUIRED**
+- Real PAN status: **STILL BLOCKED**
+- Evidence: `02-live-validation.md` and `docs/research/registrars/*.md`
 
 ## Slices
 

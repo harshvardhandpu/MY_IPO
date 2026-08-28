@@ -1,11 +1,13 @@
 # Current State
 
 - **Branch:** `feature/multi-registrar` (from Phase 3B closeout / `b9f8c0f`)
+- **HEAD:** `b87bdfb` — `docs(allotment): lock gate 1 product requirements`
 - **Phase 2C:** CLOSED
 - **Phase 3A:** CLOSED (fixture allotment)
 - **Phase 3B:** CLOSED (secure key provider, live-adapter boundary, durable worker, manual/profit APIs)
 - **Phase 3C Gate 1:** **APPROVED AND LOCKED** (multi-registrar product, fail-closed normalization, provenance, recovery, real-PAN gate)
-- **Phase 3C Gate 2:** NEXT — public live registrar behavior and capability validation; no real PAN
+- **Phase 3C Gate 2:** **APPROVED AND LOCKED**
+- **Gate 2 verdict:** **PASS WITH CHANGES REQUIRED**
 - **Independent review:** PASS — Gemini 3.6 Flash, 2026-08-28
 - **Date:** 2026-08-28
 
@@ -45,7 +47,11 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - UI report polling, cancellation, manual result controls, and profit estimation controls
 
 ### Research
-- `docs/research/registrars/KFINTECH.md` records the JS portal/CAPTCHA reality and fail-closed integration boundary
+- `docs/plans/multi-registrar-allotment/02-live-validation.md` records the current cross-provider capability matrix and Gate 2 verdict.
+- KFintech: public page/API contract and 64 issue records observed; no CAPTCHA; existing adapter needs a major isolated update.
+- Bigshare: three public servers available at final check; server-verified CAPTCHA requires human continuation; one transient Server 2 HTTP 503 and live page drift observed.
+- MUFG Intime: public discovery returned four issue ids; result path uses JavaScript/session/token; CAPTCHA markup is currently hidden/dormant; adapter not implemented.
+- Registrar details: `docs/research/registrars/KFINTECH.md`, `BIGSHARE.md`, and `MUFG_INTIME.md`.
 
 ## Verification
 
@@ -64,13 +70,13 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 1. No real PAN was entered or persisted.
 2. No live KFintech allotment lookup was attempted.
-3. Windows Credential Manager runtime smoke remains pending a Windows host.
+3. No Bigshare or MUFG investor-result lookup was attempted.
+4. No CAPTCHA was solved, submitted, or bypassed.
+5. Windows Credential Manager runtime smoke remains pending a Windows host.
 
-## Next phase candidates
+## Exact next task
 
-1. Validate current public KFintech, Bigshare, and MUFG Intime behavior without submitting PAN.
-2. Classify each provider's capabilities, health, and adapter drift.
-3. Keep real-PAN use blocked pending the controlled pilot checklist and explicit owner initiation.
+Design Gate 3's additive capability/discovery contract, deterministic registrar registry, provider-local health checks, human-verification continuation, session/token lifecycle, and sanitized parser fixture plan. Keep real-PAN use blocked.
 
 ## Canonical commands
 
