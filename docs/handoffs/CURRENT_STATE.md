@@ -1,13 +1,15 @@
 # Current State
 
 - **Branch:** `feature/multi-registrar` (from Phase 3B closeout / `b9f8c0f`)
-- **HEAD:** `b87bdfb` — `docs(allotment): lock gate 1 product requirements`
+- **HEAD:** `03d33f4` — `docs(registrar): lock gate 2 live validation`
 - **Phase 2C:** CLOSED
 - **Phase 3A:** CLOSED (fixture allotment)
 - **Phase 3B:** CLOSED (secure key provider, live-adapter boundary, durable worker, manual/profit APIs)
 - **Phase 3C Gate 1:** **APPROVED AND LOCKED** (multi-registrar product, fail-closed normalization, provenance, recovery, real-PAN gate)
 - **Phase 3C Gate 2:** **APPROVED AND LOCKED**
 - **Gate 2 verdict:** **PASS WITH CHANGES REQUIRED**
+- **Phase 3C Gate 3:** **APPROVED AND LOCKED**
+- **Gate 3 verdict:** **PASS — IMPLEMENTATION DESIGN READY**
 - **Independent review:** PASS — Gemini 3.6 Flash, 2026-08-28
 - **Date:** 2026-08-28
 
@@ -53,6 +55,20 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - MUFG Intime: public discovery returned four issue ids; result path uses JavaScript/session/token; CAPTCHA markup is currently hidden/dormant; adapter not implemented.
 - Registrar details: `docs/research/registrars/KFINTECH.md`, `BIGSHARE.md`, and `MUFG_INTIME.md`.
 
+### Gate 3 provider design
+
+- One provider-independent domain contract with provider-owned HTTP/browser/hybrid transport.
+- Typed capabilities, first-class human verification, safe continuation metadata, provider-specific retry, and structural drift fingerprints.
+- KFintech obsolete adapter is replaced rather than patched; Bigshare pauses for legitimate human verification; MUFG runs an HTTP token/session proof before browser fallback.
+- Provider cookies, request tokens, challenge content, answers, and response bodies remain ephemeral; no generic persisted provider session exists.
+- Restart preserves the durable job but expires stale continuations, then enters `PREPARING_PROVIDER_SESSION` or `VERIFICATION_REQUIRED_REFRESH` and creates a fresh legitimate session.
+- `NOT_ALLOTTED` requires confirmed provider, issue, structure, provider-specific negative marker, and zero parser ambiguity.
+- Shared HTTP policy enforces TLS, provider-domain/redirect allowlists, hard bounds/timeouts/cancellation, isolated cookies, content-type checks, explicit user agent, and no sensitive logging/body persistence.
+- Sanitized fixtures record source/retrieval/type/sanitization/SHA-256 provenance and structural fingerprints where practical; live drift degrades health.
+- `LIVE_ADAPTER_IMPLEMENTED != REAL_INVESTOR_LOOKUP_AUTHORIZED`; Gate 4 may implement machinery but may not run a real-PAN investor lookup.
+- Transport decision: `docs/architecture/decisions/ADR-registrar-transport.md`.
+- Full design: `docs/plans/multi-registrar-allotment/03-provider-design.md`.
+
 ## Verification
 
 - `cargo fmt --all -- --check` — PASS
@@ -76,7 +92,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Design Gate 3's additive capability/discovery contract, deterministic registrar registry, provider-local health checks, human-verification continuation, session/token lifecycle, and sanitized parser fixture plan. Keep real-PAN use blocked.
+Implement Gate 4A shared capability/session/runtime changes in the owner-approved order. Real PAN remains blocked.
 
 ## Canonical commands
 

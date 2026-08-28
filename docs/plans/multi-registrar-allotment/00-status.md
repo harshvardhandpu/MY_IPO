@@ -2,8 +2,8 @@
 
 - Gate 1 — Product: **APPROVED AND LOCKED**
 - Gate 2 — Live registrar behavior + capability validation: **APPROVED AND LOCKED**
-- Gate 3 — Program Design: pending
-- Gate 4 — Slice plan: pending
+- Gate 3 — Provider implementation design: **APPROVED AND LOCKED**
+- Gate 4 — Slice plan: **APPROVED — IMPLEMENTATION ORDER LOCKED**
 
 ## Gate 1 lock record
 
@@ -28,9 +28,32 @@
 - Real PAN status: **STILL BLOCKED**
 - Evidence: `02-live-validation.md` and `docs/research/registrars/*.md`
 
+## Gate 3 design record
+
+- Verdict: **PASS — IMPLEMENTATION DESIGN READY**
+- Domain shape: **ONE CONTRACT + PROVIDER-SPECIFIC TRANSPORT**
+- Transport ADR: **PROVIDER-OWNED TRANSPORT; NO GENERIC TRANSPORT TRAIT**
+- KFintech: **HTTP ADAPTER REPLACEMENT DESIGNED**
+- Bigshare: **HUMAN-VERIFICATION CONTINUATION DESIGNED**
+- MUFG Intime: **HTTP-FIRST SESSION/TOKEN PROOF WITH BROWSER FALLBACK DESIGNED**
+- Challenge/session persistence: **SAFE METADATA ONLY**
+- Fixture-first parser plan: **DEFINED**
+- Ephemeral restart: **FRESH SESSION REQUIRED; STALE CONTINUATION EXPIRES**
+- Negative result proof: **FIVE CONDITIONS REQUIRED**
+- Shared HTTP security boundary: **LOCKED**
+- Fixture provenance: **LOCKED**
+- Live implementation authorization boundary: **IMPLEMENTED != AUTHORIZED**
+- Real PAN status: **STILL BLOCKED**
+- Evidence: `03-provider-design.md` and `docs/architecture/decisions/ADR-registrar-transport.md`
+
 ## Slices
 
-Pending Gate 4.
+- [ ] Gate 4A — shared capability/session/runtime changes
+- [ ] Gate 4B — KFintech live-adapter replacement
+- [ ] Gate 4C — Bigshare human-verification adapter
+- [ ] Gate 4D — MUFG session/token adapter
+- [ ] Gate 4E — cross-provider normalization and UI
+- [ ] Gate 4F — independent review
 
 ## Verified starting point
 
