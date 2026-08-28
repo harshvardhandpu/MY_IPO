@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sanket IPO — Check Allotment mockup</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101613; --panel:#18211c; --line:#34463b; --text:#edf4ef; --muted:#9db0a3; --green:#7ee2a8; --amber:#ffc66d; --red:#ff8b82; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }
+    main { max-width:1120px; margin:auto; padding:32px 22px 64px; }
+    header,.summary,.row,.verification,.manual { border:1px solid var(--line); background:var(--panel); }
+    header { padding:24px; display:flex; justify-content:space-between; gap:20px; align-items:end; }
+    h1,h2,p { margin:0; } h1 { font-size:30px; } h2 { font-size:18px; }
+    .eyebrow,.meta { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .health { color:var(--amber); font-weight:700; }
+    .summary { border-top:0; padding:18px 24px; display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+    .summary strong { display:block; margin-top:4px; }
+    .states { margin:18px 0 0; padding:14px 16px; border:1px solid var(--line); color:var(--muted); }
+    .states code { color:var(--text); margin-right:10px; white-space:nowrap; }
+    .table { margin-top:18px; }
+    .row { display:grid; grid-template-columns:1.25fr .8fr .9fr .8fr 1fr; gap:14px; padding:16px; margin-top:8px; align-items:center; }
+    .pill { width:max-content; padding:4px 8px; border:1px solid currentColor; border-radius:99px; font-size:12px; font-weight:700; }
+    .warn { color:var(--amber); } .ok { color:var(--green); }
+    .verification { margin-top:18px; padding:22px; border-left:4px solid var(--amber); }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }
+    button { border:1px solid var(--line); background:#223028; color:var(--text); padding:10px 14px; border-radius:6px; font-weight:650; }
+    button.primary { background:var(--amber); color:#241a08; border-color:var(--amber); }
+    button.danger { color:var(--red); }
+    .manual { margin-top:18px; padding:22px; }
+    .fields { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px; }
+    label { color:var(--muted); font-size:12px; }
+    input,select { width:100%; margin-top:5px; padding:10px; color:var(--text); background:#101613; border:1px solid var(--line); border-radius:5px; }
+    .note { color:var(--muted); margin-top:10px; }
+    @media (max-width:760px) { .summary,.fields { grid-template-columns:1fr 1fr; } .row { grid-template-columns:1fr 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">Check allotment</div><h1>Example Industries IPO</h1></div>
+    <div><div class="meta">Registrar</div><strong>Bigshare Services</strong></div>
+  </header>
+  <section class="summary" aria-label="Provider summary">
+    <div><span class="meta">Provider health</span><strong class="health">HUMAN_VERIFICATION_REQUIRED</strong></div>
+    <div><span class="meta">Issue</span><strong>Verified · 28 Aug 2026</strong></div>
+    <div><span class="meta">Job</span><strong>PARTIALLY_COMPLETE · 2 of 4 checked</strong></div>
+    <div><span class="meta">Profit basis</span><strong>Not available yet</strong></div>
+  </section>
+
+  <section class="states" aria-label="Supported job states">
+    <span class="meta">Run states</span><br>
+    <code>READY_TO_CHECK</code><code>CHECKING</code><code>PARTIALLY_COMPLETE</code>
+    <code>VERIFICATION_REQUIRED</code><code>RATE_LIMITED</code><code>RETRY_SCHEDULED</code>
+    <code>PROVIDER_TEMPORARILY_UNAVAILABLE</code><code>UNKNOWN_RESPONSE</code>
+    <code>COMPLETED</code><code>CANCELLED</code><code>MANUAL_RESULT</code>
+  </section>
+
+  <section class="table" aria-label="Account results">
+    <div class="row"><div><strong>Primary account</strong><div class="meta">PRIMARY · ABCDE****F</div></div><div>₹15,000</div><div><span class="pill ok">ALLOTTED</span></div><div>1 lot · 30 shares</div><div><strong>AUTOMATED · KFintech</strong><div class="meta">10:42 · CONFIRMED_PROVIDER_RESPONSE</div></div></div>
+    <div class="row"><div><strong>Friend account 1</strong><div class="meta">FRIEND · PQRST****U</div></div><div>₹15,000</div><div><span class="pill warn">VERIFICATION REQUIRED</span></div><div>Not available</div><div><strong>Bigshare</strong><div class="meta">Awaiting member · HUMAN_CHALLENGE</div></div></div>
+    <div class="row"><div><strong>Friend account 2</strong><div class="meta">FRIEND · LMNOP****Q</div></div><div>₹15,000</div><div><span class="pill warn">UNKNOWN</span></div><div>Not available</div><div><strong>MUFG Intime</strong><div class="meta">10:44 · UNRECOGNIZED_RESPONSE</div></div></div>
+    <div class="row"><div><strong>Friend account 3</strong><div class="meta">FRIEND · RSTUV****W</div></div><div>₹15,000</div><div><span class="pill warn">RATE LIMITED</span></div><div>Retry at 14:20</div><div><strong>AUTOMATED · KFintech</strong><div class="meta">429 · RETRY_SCHEDULED</div></div></div>
+    <div class="row"><div><strong>Friend account 4</strong><div class="meta">FRIEND · WXYZA****B</div></div><div>₹15,000</div><div><span class="pill warn">PROVIDER UNAVAILABLE</span></div><div>Not available</div><div><strong>Bigshare</strong><div class="meta">Service unavailable · RETRY_SCHEDULED</div></div></div>
+    <div class="row"><div><strong>Friend account 5</strong><div class="meta">FRIEND · BCDEF****G</div></div><div>₹15,000</div><div><span class="pill ok">ALLOTTED · MANUAL</span></div><div>1 lot · 30 shares</div><div><strong>MANUAL · entered by Owner</strong><div class="meta">10:51 · CONFIRMED_BY_MEMBER</div></div></div>
+  </section>
+
+  <section class="verification" aria-labelledby="verification-title">
+    <div class="eyebrow">Action needed</div><h2 id="verification-title">Verification Required</h2>
+    <p class="note">The official registrar requires a human verification step. Sanket IPO will not bypass it or classify this account as not allotted.</p>
+    <div class="actions">
+      <button class="primary">Continue Verification</button>
+      <button>Open Official Page</button>
+      <button>Enter Result Manually</button>
+      <button class="danger">Cancel</button>
+    </div>
+  </section>
+
+  <section class="manual" aria-labelledby="manual-title">
+    <h2 id="manual-title">Record manual result</h2>
+    <div class="fields">
+      <label>Account<select><option>Friend account 1 · PQRST****U</option></select></label>
+      <label>Status<select><option>Allotted</option><option>Not allotted</option><option>Pending</option></select></label>
+      <label>Allotted shares<input inputmode="numeric" value="30"></label>
+      <label>Allotted lots<input inputmode="numeric" value="1"></label>
+      <label>Price basis<select><option>Unavailable</option><option>Actual listing price</option><option>Current market price</option><option>Owner expected price</option><option>Public estimate</option></select></label>
+      <label>Optional note<input placeholder="No PAN or private identifiers"></label>
+    </div>
+    <p class="note">Manual entries are permanently marked MANUAL with actor, device, and time. They never look identical to confirmed registrar responses.</p>
+    <div class="actions"><button class="primary">Confirm Manual Result</button></div>
+  </section>
+</main>
+</body>
+</html>

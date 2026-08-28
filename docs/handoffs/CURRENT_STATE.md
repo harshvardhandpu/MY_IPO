@@ -1,9 +1,11 @@
 # Current State
 
-- **Branch:** `feature/live-allotment` (from `phase-3a-green` / `30d9691`)
+- **Branch:** `feature/multi-registrar` (from Phase 3B closeout / `b9f8c0f`)
 - **Phase 2C:** CLOSED
 - **Phase 3A:** CLOSED (fixture allotment)
 - **Phase 3B:** CLOSED (secure key provider, live-adapter boundary, durable worker, manual/profit APIs)
+- **Phase 3C Gate 1:** **APPROVED AND LOCKED** (multi-registrar product, fail-closed normalization, provenance, recovery, real-PAN gate)
+- **Phase 3C Gate 2:** NEXT — public live registrar behavior and capability validation; no real PAN
 - **Independent review:** PASS — Gemini 3.6 Flash, 2026-08-28
 - **Date:** 2026-08-28
 
@@ -66,9 +68,9 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Next phase candidates
 
-1. Phase 3C registrar adapters (Bigshare / MUFG), preserving the same provider boundary.
-2. Browser-backed KFintech execution only after a stable DOM contract and human-verification design.
-3. Optional, explicitly approved real-member trial in `PRODUCTION_SECURE` after a separate release decision.
+1. Validate current public KFintech, Bigshare, and MUFG Intime behavior without submitting PAN.
+2. Classify each provider's capabilities, health, and adapter drift.
+3. Keep real-PAN use blocked pending the controlled pilot checklist and explicit owner initiation.
 
 ## Canonical commands
 
