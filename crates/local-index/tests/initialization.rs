@@ -15,13 +15,23 @@ fn new_database_initializes_rebuildable_projection_schema() {
     let index = LocalIndex::open(&database_path).expect("database should initialize");
 
     assert_eq!(
-        2,
+        3,
         index.schema_version().expect("schema version should load")
     );
     assert!(
         index
             .has_table("projection_events")
             .expect("table check should work")
+    );
+    assert!(
+        index
+            .has_table("allotment_jobs")
+            .expect("allotment jobs table should exist")
+    );
+    assert!(
+        index
+            .has_table("allotment_attempts")
+            .expect("allotment attempts table should exist")
     );
     #[cfg(unix)]
     {
@@ -37,7 +47,7 @@ fn new_database_initializes_rebuildable_projection_schema() {
 
     let reopened = LocalIndex::open(&database_path).expect("database should reopen idempotently");
     assert_eq!(
-        2,
+        3,
         reopened
             .schema_version()
             .expect("schema should remain current")

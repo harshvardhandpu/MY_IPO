@@ -105,6 +105,31 @@ pub enum EventPayload {
         session_id: String,
         recommendation_id: String,
     },
+    /// Allotment check job created for one IPO/application (no PAN).
+    AllotmentJobCreated {
+        job_id: String,
+        application_id: String,
+        session_id: String,
+        ipo_name: String,
+        registrar_id: String,
+        provider_id: String,
+    },
+    /// Job status advanced.
+    AllotmentJobStatusChanged {
+        job_id: String,
+        status: String,
+    },
+    /// Per-account attempt result (account_id only; never PAN).
+    AllotmentAttemptRecorded {
+        attempt_id: String,
+        job_id: String,
+        account_id: String,
+        status: String,
+        allotted_lots: Option<u32>,
+        allotted_shares: Option<u64>,
+        source: String,
+        provider_reference: Option<String>,
+    },
 }
 
 impl EventPayload {
@@ -122,6 +147,9 @@ impl EventPayload {
             Self::InvestmentSessionSubmitted { .. } => "INVESTMENT_SESSION_SUBMITTED",
             Self::InvestmentRecommendationGenerated { .. } => "INVESTMENT_RECOMMENDATION_GENERATED",
             Self::InvestmentRecommendationApplied { .. } => "INVESTMENT_RECOMMENDATION_APPLIED",
+            Self::AllotmentJobCreated { .. } => "ALLOTMENT_JOB_CREATED",
+            Self::AllotmentJobStatusChanged { .. } => "ALLOTMENT_JOB_STATUS_CHANGED",
+            Self::AllotmentAttemptRecorded { .. } => "ALLOTMENT_ATTEMPT_RECORDED",
         }
     }
 }

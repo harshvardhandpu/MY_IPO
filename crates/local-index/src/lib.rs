@@ -79,12 +79,49 @@ CREATE TABLE IF NOT EXISTS recommendations (
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);
 "#;
 
+// Schema v3: allotment jobs and per-account attempts. Never store PAN.
+const SCHEMA_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS allotment_jobs (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    ipo_name TEXT NOT NULL,
+    registrar_id TEXT NOT NULL,
+    registrar_name TEXT NOT NULL,
+    official_status_url TEXT,
+    provider_id TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS allotment_attempts (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    allotted_lots INTEGER,
+    allotted_shares INTEGER,
+    provider_reference TEXT,
+    safe_message TEXT,
+    source TEXT NOT NULL,
+    last_attempt_at TEXT,
+    next_retry_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_allotment_attempts_job ON allotment_attempts(job_id);
+
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
 }
 
 pub type FriendProjectionRow = (String, String, String, String, i64);
 pub type AllocationProjectionRow = (String, String, String, i64, i64);
+pub type SubmittedApplicationRow = (String, String, String, i64, u32);
+pub type AllotmentJobRow = (String, String, String, String, String, String);
+pub type AllotmentAttemptRow = (String, String, String, Option<i64>, Option<i64>, String);
 
 #[derive(Debug, Error)]
 pub enum LocalIndexError {
@@ -112,6 +149,7 @@ impl LocalIndex {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.execute_batch(SCHEMA_V1)?;
         connection.execute_batch(SCHEMA_V2)?;
+        connection.execute_batch(SCHEMA_V3)?;
         Ok(Self { connection })
     }
 
@@ -354,10 +392,75 @@ impl LocalIndex {
                     params![session_id, algorithm_version, rec_id],
                 )?;
             }
-            _ => {
-                return Err(LocalIndexError::UnsupportedEvent(
-                    event.event_type().to_owned(),
-                ));
+            sanket_domain::EventPayload::AllotmentJobCreated {
+                job_id,
+                application_id,
+                session_id,
+                ipo_name,
+                registrar_id,
+                provider_id,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO allotment_jobs(
+                        id, application_id, session_id, ipo_name, registrar_id, registrar_name,
+                        provider_id, status
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 'CREATED')
+                     ON CONFLICT(id) DO UPDATE SET status=excluded.status",
+                    params![
+                        job_id,
+                        application_id,
+                        session_id,
+                        ipo_name,
+                        registrar_id,
+                        provider_id
+                    ],
+                )?;
+            }
+            sanket_domain::EventPayload::AllotmentJobStatusChanged { job_id, status } => {
+                self.connection.execute(
+                    "UPDATE allotment_jobs SET status=?2 WHERE id=?1",
+                    params![job_id, status],
+                )?;
+            }
+            sanket_domain::EventPayload::AllotmentAttemptRecorded {
+                attempt_id,
+                job_id,
+                account_id,
+                status,
+                allotted_lots,
+                allotted_shares,
+                source,
+                provider_reference,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO allotment_attempts(
+                        id, job_id, account_id, status, attempt_count, allotted_lots, allotted_shares,
+                        provider_reference, source
+                     ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(id) DO UPDATE SET
+                        status=excluded.status,
+                        allotted_lots=excluded.allotted_lots,
+                        allotted_shares=excluded.allotted_shares,
+                        provider_reference=excluded.provider_reference,
+                        source=excluded.source,
+                        attempt_count=allotment_attempts.attempt_count + 1",
+                    params![
+                        attempt_id,
+                        job_id,
+                        account_id,
+                        status,
+                        allotted_lots.map(|v| v as i64),
+                        allotted_shares.map(|v| v as i64),
+                        provider_reference,
+                        source
+                    ],
+                )?;
+            }
+            sanket_domain::EventPayload::InvestmentRecommendationApplied { .. }
+            | sanket_domain::EventPayload::DeviceRegistered { .. }
+            | sanket_domain::EventPayload::SettingsInitialized { .. }
+            | sanket_domain::EventPayload::SensitiveIdentityAccessed { .. } => {
+                // Projected elsewhere or audit-only; keep idempotent event mark.
             }
         }
 
@@ -368,6 +471,8 @@ impl LocalIndex {
     pub fn rebuild(&self, events: &[EventEnvelope]) -> Result<(), LocalIndexError> {
         self.connection.execute_batch(
             "DELETE FROM projection_events;
+             DELETE FROM allotment_attempts;
+             DELETE FROM allotment_jobs;
              DELETE FROM allocations;
              DELETE FROM applications;
              DELETE FROM ipos;
@@ -433,6 +538,143 @@ impl LocalIndex {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// Submitted IPO applications eligible for allotment checks.
+    pub fn list_submitted_applications(
+        &self,
+    ) -> Result<Vec<SubmittedApplicationRow>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT app.id, app.session_id, app.ipo_name, app.planned_amount_paise,
+                    (SELECT COUNT(*) FROM allocations a WHERE a.application_id = app.id)
+             FROM applications app
+             JOIN investment_sessions s ON s.id = app.session_id
+             WHERE s.status = 'SUBMITTED'
+             ORDER BY app.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get::<_, i64>(4)? as u32,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_account_ids_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<String>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT DISTINCT account_id FROM allocations WHERE application_id = ?1 ORDER BY account_id",
+        )?;
+        let rows = stmt.query_map([application_id], |row| row.get(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_allotment_jobs(&self) -> Result<Vec<AllotmentJobRow>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, application_id, session_id, ipo_name, registrar_id, status
+             FROM allotment_jobs ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_allotment_attempts(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<AllotmentAttemptRow>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, account_id, status, allotted_lots, allotted_shares, source
+             FROM allotment_attempts WHERE job_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([job_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn masked_pan_for_account(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<String>, LocalIndexError> {
+        let m: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT masked_pan FROM members WHERE id = ?1
+                 UNION
+                 SELECT masked_pan FROM friend_accounts WHERE id = ?1
+                 LIMIT 1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(m)
+    }
+
+    pub fn display_label_for_account(
+        &self,
+        account_id: &str,
+    ) -> Result<(String, String), LocalIndexError> {
+        if let Some(row) = self
+            .connection
+            .query_row(
+                "SELECT display_name, 'PRIMARY' FROM members WHERE id = ?1",
+                [account_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        {
+            return Ok(row);
+        }
+        if let Some(row) = self
+            .connection
+            .query_row(
+                "SELECT label, 'FRIEND' FROM friend_accounts WHERE id = ?1",
+                [account_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        {
+            return Ok(row);
+        }
+        Ok((account_id.to_owned(), "UNKNOWN".into()))
     }
 }
 
