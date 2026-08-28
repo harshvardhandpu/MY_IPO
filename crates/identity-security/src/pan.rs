@@ -90,6 +90,15 @@ impl MaskedPan {
         }
         MaskedPan(format!("{first_five}****{last}"))
     }
+
+    /// Accept an already-masked display string such as `ABCDE****F`.
+    pub fn from_display(s: impl Into<String>) -> Result<Self, PanError> {
+        let s = s.into();
+        if s.len() == 10 && s.as_bytes()[5..9] == *b"****" {
+            return Ok(MaskedPan(s));
+        }
+        Err(PanError::InvalidFormat)
+    }
 }
 
 // Never reveal the full PAN in any display or debug path.

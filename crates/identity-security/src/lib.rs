@@ -123,6 +123,19 @@ impl SensitiveIdentityRecord {
     pub fn envelope(&self) -> &EncryptedIdentityEnvelope {
         &self.envelope
     }
+
+    /// Rehydrate a record from vault ciphertext + already-masked display value.
+    pub fn from_stored(
+        account_id: impl Into<String>,
+        masked_pan: MaskedPan,
+        envelope: EncryptedIdentityEnvelope,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            masked_pan,
+            envelope,
+        }
+    }
 }
 
 // `Debug` is derived above: `MaskedPan` and the envelope both redact their
