@@ -63,7 +63,13 @@ impl InvestmentDecisionRequest {
         ipos: Vec<PlannedIpo>,
         algorithm_version: impl Into<String>,
     ) -> Self {
-        Self::with_account_count(session_id, declared_daily_capital_paise, ipos, algorithm_version, 0)
+        Self::with_account_count(
+            session_id,
+            declared_daily_capital_paise,
+            ipos,
+            algorithm_version,
+            0,
+        )
     }
 
     pub fn with_account_count(

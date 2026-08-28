@@ -83,6 +83,9 @@ pub struct LocalIndex {
     connection: Connection,
 }
 
+pub type FriendProjectionRow = (String, String, String, String, i64);
+pub type AllocationProjectionRow = (String, String, String, i64, i64);
+
 #[derive(Debug, Error)]
 pub enum LocalIndexError {
     #[error("failed to create local index directory: {0}")]
@@ -200,12 +203,7 @@ impl LocalIndex {
             .connection
             .prepare("SELECT id, display_name, role, masked_pan FROM members ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-            ))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
         let mut out = Vec::new();
         for r in rows {
@@ -214,13 +212,19 @@ impl LocalIndex {
         Ok(out)
     }
 
-    pub fn list_active_friends(&self) -> Result<Vec<(String, String, String, String, i64)>, LocalIndexError> {
+    pub fn list_active_friends(&self) -> Result<Vec<FriendProjectionRow>, LocalIndexError> {
         let mut stmt = self.connection.prepare(
             "SELECT id, owner_member_id, label, masked_pan, share_basis_points
              FROM friend_accounts WHERE status = 'ACTIVE' ORDER BY id",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?;
         let mut out = Vec::new();
         for r in rows {
@@ -252,16 +256,46 @@ impl LocalIndex {
         )?;
 
         match event.payload() {
-            sanket_domain::EventPayload::MemberCreated { member_id, display_name, role } => {
-                self.upsert_member(member_id, display_name, &role_to_str(*role), "[MASKED]")?;
+            sanket_domain::EventPayload::MemberCreated {
+                member_id,
+                display_name,
+                role,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO members(id, display_name, role, masked_pan, status)
+                     VALUES (?1, ?2, ?3, '[MASKED]', 'ACTIVE')
+                     ON CONFLICT(id) DO UPDATE SET
+                         display_name=excluded.display_name,
+                         role=excluded.role",
+                    params![member_id, display_name, role_to_str(*role)],
+                )?;
             }
-            sanket_domain::EventPayload::FriendAdded { friend_id, owner_member_id, share_basis_points, label } => {
-                self.upsert_friend(friend_id, owner_member_id, label, "[MASKED]", *share_basis_points)?;
+            sanket_domain::EventPayload::FriendAdded {
+                friend_id,
+                owner_member_id,
+                share_basis_points,
+                label,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO friend_accounts(
+                         id, owner_member_id, label, masked_pan, share_basis_points, status
+                     ) VALUES (?1, ?2, ?3, '[MASKED]', ?4, 'ACTIVE')
+                     ON CONFLICT(id) DO UPDATE SET
+                         owner_member_id=excluded.owner_member_id,
+                         label=excluded.label,
+                         share_basis_points=excluded.share_basis_points,
+                         status='ACTIVE'",
+                    params![friend_id, owner_member_id, label, share_basis_points],
+                )?;
             }
             sanket_domain::EventPayload::FriendArchived { friend_id, .. } => {
                 self.archive_friend(friend_id)?;
             }
-            sanket_domain::EventPayload::InvestmentSessionCreated { session_id, actor_member_id, declared_capital_paise } => {
+            sanket_domain::EventPayload::InvestmentSessionCreated {
+                session_id,
+                actor_member_id,
+                declared_capital_paise,
+            } => {
                 self.connection.execute(
                     "INSERT INTO investment_sessions(id, actor_member_id, declared_capital_paise, status)
                      VALUES (?1, ?2, ?3, 'OPEN')
@@ -269,7 +303,12 @@ impl LocalIndex {
                     params![session_id, actor_member_id, declared_capital_paise],
                 )?;
             }
-            sanket_domain::EventPayload::IpoApplicationCreated { application_id, session_id, ipo_name, planned_amount_paise } => {
+            sanket_domain::EventPayload::IpoApplicationCreated {
+                application_id,
+                session_id,
+                ipo_name,
+                planned_amount_paise,
+            } => {
                 self.connection.execute(
                     "INSERT INTO applications(id, session_id, ipo_name, planned_amount_paise)
                      VALUES (?1, ?2, ?3, ?4)
@@ -281,7 +320,13 @@ impl LocalIndex {
                     params![application_id, ipo_name],
                 )?;
             }
-            sanket_domain::EventPayload::AllocationAdded { allocation_id, application_id, account_id, amount_paise, share_basis_points } => {
+            sanket_domain::EventPayload::AllocationAdded {
+                allocation_id,
+                application_id,
+                account_id,
+                amount_paise,
+                share_basis_points,
+            } => {
                 self.connection.execute(
                     "INSERT INTO allocations(id, application_id, account_id, amount_paise, share_basis_points)
                      VALUES (?1, ?2, ?3, ?4, ?5)
@@ -289,13 +334,19 @@ impl LocalIndex {
                     params![allocation_id, application_id, account_id, amount_paise, share_basis_points],
                 )?;
             }
-            sanket_domain::EventPayload::InvestmentSessionSubmitted { session_id, recommendation_id } => {
+            sanket_domain::EventPayload::InvestmentSessionSubmitted {
+                session_id,
+                recommendation_id,
+            } => {
                 self.connection.execute(
                     "UPDATE investment_sessions SET status='SUBMITTED', recommendation_id=?2 WHERE id=?1",
                     params![session_id, recommendation_id],
                 )?;
             }
-            sanket_domain::EventPayload::InvestmentRecommendationGenerated { session_id, algorithm_version } => {
+            sanket_domain::EventPayload::InvestmentRecommendationGenerated {
+                session_id,
+                algorithm_version,
+            } => {
                 use uuid::Uuid;
                 let rec_id = Uuid::now_v7().to_string();
                 self.connection.execute(
@@ -304,7 +355,9 @@ impl LocalIndex {
                 )?;
             }
             _ => {
-                return Err(LocalIndexError::UnsupportedEvent(event.event_type().to_owned()));
+                return Err(LocalIndexError::UnsupportedEvent(
+                    event.event_type().to_owned(),
+                ));
             }
         }
 
@@ -333,7 +386,9 @@ impl LocalIndex {
         let mut stmt = self.connection.prepare(
             "SELECT id, actor_member_id, declared_capital_paise, status FROM investment_sessions ORDER BY id",
         )?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -341,7 +396,10 @@ impl LocalIndex {
         Ok(out)
     }
 
-    pub fn list_allocations(&self, session_id: &str) -> Result<Vec<(String, String, String, i64, i64)>, LocalIndexError> {
+    pub fn list_allocations(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<AllocationProjectionRow>, LocalIndexError> {
         let mut stmt = self.connection.prepare(
             "SELECT a.id, a.application_id, a.account_id, a.amount_paise, a.share_basis_points
              FROM allocations a
@@ -350,7 +408,13 @@ impl LocalIndex {
              ORDER BY a.id",
         )?;
         let rows = stmt.query_map([session_id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?;
         let mut out = Vec::new();
         for r in rows {

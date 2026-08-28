@@ -195,7 +195,7 @@ impl RankingAlgorithm for DevRankingAlgorithm {
             ranked.push(RankedIpo {
                 typed_name: name,
                 ranking: index as u32 + 1,
-                score: (10_000 - allocation_bp) as i64,
+                score: 10_000 - allocation_bp,
                 recommended_account_count: count,
                 recommended_allocation_ratio_bp: allocation_bp,
                 skip: false,

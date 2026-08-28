@@ -1,7 +1,8 @@
 //! Phase 2C(3A): investment session, IPO, application, and allocation domain.
 
 use sanket_domain::{
-    BasisPoints, EventPayload, InvestmentAllocation, InvestmentSession, IpoApplication, Money, NewEvent,
+    BasisPoints, EventPayload, InvestmentAllocation, InvestmentSession, IpoApplication, Money,
+    NewEvent,
 };
 
 #[test]
@@ -90,8 +91,16 @@ fn recommendation_generated_and_applied_events_seal() {
         session_id: "s1".to_owned(),
         recommendation_id: "rec-1".to_owned(),
     };
-    assert!(serde_json::to_string(&generated).unwrap().contains("INVESTMENT_RECOMMENDATION_GENERATED"));
-    assert!(serde_json::to_string(&applied).unwrap().contains("INVESTMENT_RECOMMENDATION_APPLIED"));
+    assert!(
+        serde_json::to_string(&generated)
+            .unwrap()
+            .contains("INVESTMENT_RECOMMENDATION_GENERATED")
+    );
+    assert!(
+        serde_json::to_string(&applied)
+            .unwrap()
+            .contains("INVESTMENT_RECOMMENDATION_APPLIED")
+    );
 }
 
 #[test]

@@ -41,7 +41,11 @@ fn first_ipo_gets_largest_share_and_rest_get_less() {
 
 #[test]
 fn deterministic_ranking_is_stable() {
-    let ipos = vec!["Alpha IPO".to_owned(), "Beta IPO".to_owned(), "Gamma IPO".to_owned()];
+    let ipos = vec![
+        "Alpha IPO".to_owned(),
+        "Beta IPO".to_owned(),
+        "Gamma IPO".to_owned(),
+    ];
     let r1 = dev().evaluate(ipos.clone(), 6).unwrap();
     let r2 = dev().evaluate(ipos, 6).unwrap();
     let s1: Vec<String> = r1.ipos().map(|i| i.typed_name().to_owned()).collect();

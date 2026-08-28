@@ -1,11 +1,14 @@
 //! Phase 2C: investment projection tables + rebuild-from-events.
 
-use sanket_domain::{
-    EventEnvelope, EventPayload, NewEvent,
-};
+use sanket_domain::{EventEnvelope, EventPayload, NewEvent};
 use sanket_local_index::LocalIndex;
 
-fn seal(event_id: &str, aggregate_type: &str, aggregate_id: &str, payload: EventPayload) -> EventEnvelope {
+fn seal(
+    event_id: &str,
+    aggregate_type: &str,
+    aggregate_id: &str,
+    payload: EventPayload,
+) -> EventEnvelope {
     EventEnvelope::seal(NewEvent {
         event_id: event_id.to_owned(),
         aggregate_type: aggregate_type.to_owned(),
@@ -42,11 +45,18 @@ fn schema_version_two_adds_projection_tables() {
 fn projection_tables_have_no_full_pan_column() {
     let dir = tempfile::tempdir().unwrap();
     let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
-    for table in ["members", "friend_accounts", "investment_sessions", "allocations"] {
+    for table in [
+        "members",
+        "friend_accounts",
+        "investment_sessions",
+        "allocations",
+    ] {
         let cols = index.columns(table).unwrap();
         // Only `masked_pan` may mention PAN; no column may store a full PAN.
         assert!(
-            !cols.iter().any(|c| c.to_lowercase().contains("pan") && c != "masked_pan"),
+            !cols
+                .iter()
+                .any(|c| c.to_lowercase().contains("pan") && c != "masked_pan"),
             "{table} must have no full-PAN column: {cols:?}"
         );
     }
