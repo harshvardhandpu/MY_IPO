@@ -151,4 +151,123 @@ describe("functional desktop flows", () => {
     });
     expect(await screen.findByText("Investment session submitted")).toBeVisible();
   });
+
+  it("presents one provider-independent allotment flow with mixed account progress", async () => {
+    const report = {
+      job_id: "job-1",
+      application_id: "app-1",
+      ipo_name: "Example IPO",
+      registrar_id: "bigshare",
+      registrar_name: "Bigshare Services",
+      provider_id: "bigshare-live",
+      provider_name: "Bigshare",
+      provider_health: "HUMAN_VERIFICATION_REQUIRED",
+      status: "PARTIALLY_COMPLETE",
+      official_status_url: "https://ipo.bigshareonline.com/ipo_status.html",
+      checked_at: "2026-08-29T12:00:00Z",
+      final_count: 1,
+      pending_count: 1,
+      accounts: [
+        {
+          attempt_id: "attempt-1",
+          account_id: "member-1",
+          display_name: "Owner",
+          account_kind: "PRIMARY",
+          masked_pan: "ABCDE****F",
+          application_amount_paise: 1500000,
+          status: "ALLOTTED",
+          allotted_lots: 1,
+          allotted_shares: 35,
+          provider_id: "bigshare-live",
+          registrar_id: "bigshare",
+          source: "AUTOMATED_PROVIDER",
+          provenance: "CONFIRMED_PROVIDER_RESPONSE",
+          checked_at: "2026-08-29T12:00:00Z",
+          safe_provider_reference: "safe-ref",
+          human_verification_state: null,
+          estimated_profit_paise: null,
+          profit_basis: "UNAVAILABLE",
+        },
+        {
+          attempt_id: "attempt-2",
+          account_id: "friend-1",
+          display_name: "Friend",
+          account_kind: "FRIEND",
+          masked_pan: "PQRST****U",
+          application_amount_paise: 1500000,
+          status: "NEEDS_HUMAN_VERIFICATION",
+          allotted_lots: null,
+          allotted_shares: null,
+          provider_id: "bigshare-live",
+          registrar_id: "bigshare",
+          source: "AUTOMATED_PROVIDER",
+          provenance: "PROVIDER_OPERATIONAL_STATE",
+          checked_at: "2026-08-29T12:00:00Z",
+          safe_provider_reference: null,
+          human_verification_state: "REQUIRED",
+          estimated_profit_paise: null,
+          profit_basis: "UNAVAILABLE",
+        },
+      ],
+    };
+    const bridge = bridgeWith({
+      list_members: () => [member],
+      list_friends: () => [],
+      get_dashboard: () => ({
+        total_planned_paise: 1500000,
+        submitted_session_count: 1,
+        member_count: 1,
+        friend_count: 0,
+        profit_paise: 0,
+      }),
+      get_security_status: () => ({
+        mode: "DEVELOPMENT_SYNTHETIC",
+        key_provider: "in-memory-dev",
+        real_pan_allowed: false,
+        os_keyring_release_blocker: true,
+        blocker: "Real PAN is blocked",
+      }),
+      list_allotment_candidates: () => [
+        {
+          application_id: "app-1",
+          session_id: "session-1",
+          ipo_name: "Example IPO",
+          planned_amount_paise: 1500000,
+          account_count: 2,
+          registrar_id: "bigshare",
+          registrar_name: "Bigshare Services",
+          provider_id: "bigshare-live",
+          provider_name: "Bigshare",
+          official_status_url: "https://ipo.bigshareonline.com/ipo_status.html",
+          provider_health: "HUMAN_VERIFICATION_REQUIRED",
+          expected_allotment_date: "2026-08-30",
+          pending_count: 2,
+          final_count: 0,
+          last_checked: null,
+          overall_job_state: "READY_TO_CHECK",
+        },
+      ],
+      start_allotment_check: () => report,
+      get_allotment_report: () => report,
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check Allotment" }));
+
+    expect(await screen.findByText("Bigshare Services")).toBeVisible();
+    expect(screen.queryByLabelText("Provider mode")).not.toBeInTheDocument();
+    expect(screen.getByText("Verification required")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Check All Accounts" }));
+
+    expect(await screen.findByRole("heading", { name: "Example IPO" })).toBeVisible();
+    expect(screen.getByText("Partially complete · 1 of 2 final")).toBeVisible();
+    expect(screen.getByText("Allotted")).toBeVisible();
+    expect(screen.getByText("Verification Required")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Continue Verification for Friend" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open Official Page" })).toHaveAttribute(
+      "href",
+      "https://ipo.bigshareonline.com/ipo_status.html",
+    );
+    expect(screen.queryByText("ABCDE1234F")).not.toBeInTheDocument();
+  });
 });

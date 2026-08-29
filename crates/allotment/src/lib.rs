@@ -33,7 +33,7 @@ pub use provider::{
     ProviderTransportKind, RegistrarIssue, SafeProviderMetadataError, SanitizedFixtureProvenance,
     SessionRequirement,
 };
-pub use registry::{ProviderId, ProviderRegistry};
+pub use registry::{ProviderDescriptor, ProviderId, ProviderRegistry};
 pub use runtime::{JobLease, ProviderRateLimiter, ProviderRatePolicy};
 pub use status::NormalizedAllotmentStatus;
 

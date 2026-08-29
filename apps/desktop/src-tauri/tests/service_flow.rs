@@ -74,6 +74,8 @@ fn onboarding_check_submit_flow_keeps_plaintext_identity_out_of_projection() {
                 name: "Example IPO".to_owned(),
                 amount_paise: 200_000,
                 account_ids: vec!["member-1".to_owned()],
+                registrar_id: "kfintech".into(),
+                expected_allotment_date: None,
             }],
         })
         .unwrap();

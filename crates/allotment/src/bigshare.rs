@@ -256,6 +256,15 @@ impl AllotmentProvider for BigshareProvider {
         issue.registrar_id.to_ascii_lowercase().contains("bigshare")
     }
 
+    fn prepare_lookup(
+        &self,
+        _context: &AllotmentLookupContext,
+    ) -> Result<Option<ProviderAllotmentResult>, ProviderError> {
+        Err(ProviderError::NeedsHuman(
+            "bigshare portal requires official human verification".into(),
+        ))
+    }
+
     fn check_allotment(
         &self,
         _context: &AllotmentLookupContext,

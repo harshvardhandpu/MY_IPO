@@ -18,6 +18,7 @@
 - **Gate 4C independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking, two accepted non-blocking findings (bounded HTML scanners; lexical RFC3339 expiry compare)
 - **Phase 3C Gate 4D:** **APPROVED AND LOCKED** (MUFG session/token adapter at `db5be5d`; fail-closed correction at `82971e0`; 40 focused tests; sanitized fixtures with SHA-256 provenance)
 - **Gate 4D independent re-review:** PASS — `moonshotai/kimi-k3` via NVIDIA NIM (free), 2026-08-29; original CAPTCHA visibility blocker resolved, zero blocking findings
+- **Phase 3C Gate 4E:** **IMPLEMENTED — UNCOMMITTED** (cross-provider normalization + unified allotment UI; see below)
 - **Date:** 2026-08-29
 
 ## Model routing (binding)
@@ -128,7 +129,20 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Implement Gate 4E cross-provider normalization and UI (next approved slice; see `docs/plans/multi-registrar-allotment/04-slices.md`). Deferred debt carried into later slices: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow. Gate 4D is approved and locked at `82971e0`. Real PAN remains blocked.
+Gate 4E implementation is complete and green (see "Gate 4E implemented" below). Next: (1) commit the Gate 4E diff as a focused logical commit on `feature/multi-registrar`; (2) run the required independent review with a free, independent model (Kimi K3 / DeepSeek V4 Pro / gpt-oss-120b, whichever is healthy — NOT Gemini); (3) on PASS, close Gate 4E and lock it before Gate 4F. Deferred debt carried forward: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow. Real PAN remains blocked.
+
+## Gate 4E implemented
+
+Cross-provider normalization and unified allotment UI, on top of the locked KFintech/Bigshare/MUFG adapters:
+
+- **Deterministic registrar resolution** — `ProviderRegistry::resolve_registrar()` maps registrar ids (`kfintech`, `bigshare`, `mufg_intime`) to typed `ProviderDescriptor` (id + name + `ProviderId` + official status URL). Unknown registrars fail closed; no substring/name guessing.
+- **Durable job resolution** — `execute_allotment_check` resolves registrar/provider from the persisted job state, not caller input twice; restart-safe prepare/verify/cancel/reconcile all use the same authoritative registry-resolved values.
+- **Dev-mode enqueue gate** — `validate_allotment_provider` now permits live adapters (kfintech/bigshare/mufg) to be enqueued under `DEVELOPMENT_SYNTHETIC` so they reach their typed operational/human-verification states; the unattended run path still fails closed before any PAN access or network lookup.
+- **Cross-provider normalization** — `NOT_ALLOTTED` only from provider-confirmed `NegativeResultProof`; `NOT_FOUND` / `UNKNOWN` / CAPTCHA / timeout / 503 / 429 / parser error never manufacture `NOT_ALLOTTED`. Estimated vs realized profit kept distinct with provenance.
+- **Provider failure isolation** — per-account statuses; partial completion preserves finals; `run_allotment_job_once` lease-gated against duplicate execution.
+- **Unified UI** — one workflow for all three registrars: candidate listing (registrar, provider, health), check/retry/manual-fallback, account-level progress (Waiting/Checking/Allotted/Not allotted/Not found/Unknown/Verification required/Retry scheduled/Provider unavailable/Cancelled/Completed), report card with provider + provenance + checked time + masked PAN + shares/lots + profit estimate + basis. UNKNOWN is visually distinct from NOT_ALLOTTED. Full PAN, cookies, tokens, and raw responses never cross the Tauri DTO boundary.
+
+Verification (all green): `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `npm run check` (152-file secret scan + typecheck + 5 Vitest + 4 Python), `npm run build`.
 
 ## Canonical commands
 

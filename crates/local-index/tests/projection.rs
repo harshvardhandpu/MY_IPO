@@ -110,6 +110,10 @@ fn rebuild_session_and_allocations_from_events() {
                 session_id: "s1".to_owned(),
                 ipo_name: "Example IPO".to_owned(),
                 planned_amount_paise: 200_000,
+                registrar_id: "kfintech".into(),
+                registrar_name: "KFintech".into(),
+                official_status_url: Some("https://ipostatus.kfintech.com".into()),
+                expected_allotment_date: None,
             },
         ),
         seal(

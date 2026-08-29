@@ -1,11 +1,11 @@
 use sanket_allotment::{
     AllotmentCheckAttempt, AllotmentCheckJob, AllotmentJobStatus, AllotmentProvider, AttemptStatus,
-    BackgroundExecution, FixtureKfintechProvider, HumanVerificationChallenge,
+    BackgroundExecution, BigshareProvider, FixtureKfintechProvider, HumanVerificationChallenge,
     HumanVerificationRequirement, HumanVerificationStatus, HumanVerificationType,
-    IssueDiscoveryMode, LookupKeyKind, ManualReportedOutcome, ManualResultInput,
-    NegativeResultProof, NormalizedAllotmentStatus, ProviderContinuationReference, ProviderId,
-    ProviderRegistry, ProviderResultProvenance, ProviderTransportKind, SanitizedFixtureProvenance,
-    SessionRequirement,
+    IssueDiscoveryMode, KfintechProvider, LookupKeyKind, ManualReportedOutcome, ManualResultInput,
+    MufgIntimeProvider, NegativeResultProof, NormalizedAllotmentStatus,
+    ProviderContinuationReference, ProviderId, ProviderRegistry, ProviderResultProvenance,
+    ProviderTransportKind, SanitizedFixtureProvenance, SessionRequirement,
 };
 
 #[test]
@@ -151,4 +151,159 @@ fn sanitized_fixture_provenance_is_complete() {
 #[test]
 fn implemented_live_adapter_does_not_authorize_real_lookup() {
     assert!(!sanket_allotment::real_investor_lookup_allowed());
+}
+
+#[test]
+fn registrar_registry_routes_only_explicit_supported_ids() {
+    let kfin = ProviderRegistry::resolve_registrar("kfintech").unwrap();
+    let bigshare = ProviderRegistry::resolve_registrar("bigshare").unwrap();
+    let mufg = ProviderRegistry::resolve_registrar("mufg_intime").unwrap();
+
+    assert_eq!(kfin.provider_id, ProviderId::KfintechLive);
+    assert_eq!(bigshare.provider_id, ProviderId::BigshareLive);
+    assert_eq!(mufg.provider_id, ProviderId::MufgIntimeLive);
+    assert!(ProviderRegistry::resolve_registrar("unknown registrar").is_none());
+    assert!(ProviderRegistry::resolve_registrar("Acme KFin-like Services").is_none());
+}
+
+#[test]
+fn mixed_account_states_are_partially_complete_without_hiding_finals() {
+    assert_eq!(
+        AllotmentJobStatus::from_attempt_statuses(&[
+            AttemptStatus::Allotted,
+            AttemptStatus::NeedsHumanVerification,
+        ]),
+        AllotmentJobStatus::PartiallyComplete
+    );
+    assert_eq!(
+        AllotmentJobStatus::from_attempt_statuses(&[
+            AttemptStatus::Allotted,
+            AttemptStatus::NotAllotted,
+            AttemptStatus::NotFound,
+            AttemptStatus::ManualResult,
+        ]),
+        AllotmentJobStatus::Complete
+    );
+    assert_eq!(
+        AllotmentJobStatus::from_attempt_statuses(&[AttemptStatus::NeedsHumanVerification]),
+        AllotmentJobStatus::PartiallyComplete
+    );
+}
+
+#[test]
+fn confirmed_results_have_cross_provider_application_semantics() {
+    let kfin_cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/kfintech/cases.json")).unwrap();
+    let bigshare_cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/bigshare/cases.json")).unwrap();
+    let mufg_cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/mufg/cases.json")).unwrap();
+
+    let results = [
+        KfintechProvider::parse_result_body(
+            &kfin_cases["allotted"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "kfin-result-data-array-v1",
+        )
+        .unwrap(),
+        BigshareProvider::parse_result_body(
+            &bigshare_cases["ok_allotted"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "bigshare-result-d-status-v1",
+        )
+        .unwrap(),
+        MufgIntimeProvider::parse_result_body(
+            &mufg_cases["allotted"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "mufg-result-d-xml-table-v1",
+        )
+        .unwrap(),
+    ];
+
+    for result in results {
+        assert_eq!(result.status(), NormalizedAllotmentStatus::Allotted);
+        assert_eq!(result.allotted_shares(), Some(35));
+        assert_eq!(
+            result.provenance(),
+            ProviderResultProvenance::ConfirmedProviderResponse
+        );
+        let serialized = serde_json::to_string(&result).unwrap();
+        assert!(!serialized.contains("ABCDE1234F"));
+        assert!(!serialized.to_ascii_lowercase().contains("cookie"));
+        assert!(!serialized.to_ascii_lowercase().contains("request_token"));
+    }
+}
+
+#[test]
+fn only_confirmed_provider_negatives_normalize_to_not_allotted() {
+    let kfin_cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/kfintech/cases.json")).unwrap();
+    let bigshare_cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/bigshare/cases.json")).unwrap();
+    let mufg_cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/mufg/cases.json")).unwrap();
+
+    let negatives = [
+        KfintechProvider::parse_result_body(
+            &kfin_cases["not_allotted"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "kfin-result-data-array-v1",
+        )
+        .unwrap(),
+        BigshareProvider::parse_result_body(
+            &bigshare_cases["ok_not_allotted"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "bigshare-result-d-status-v1",
+        )
+        .unwrap(),
+        MufgIntimeProvider::parse_result_body(
+            &mufg_cases["not_allotted"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "mufg-result-d-xml-table-v1",
+        )
+        .unwrap(),
+    ];
+    assert!(
+        negatives
+            .iter()
+            .all(|result| result.status() == NormalizedAllotmentStatus::NotAllotted)
+    );
+
+    assert_eq!(
+        BigshareProvider::parse_result_body(
+            &bigshare_cases["notfound"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "bigshare-result-d-status-v1",
+        )
+        .unwrap()
+        .status(),
+        NormalizedAllotmentStatus::NotFound
+    );
+    assert_eq!(
+        MufgIntimeProvider::parse_result_body(
+            &mufg_cases["not_found"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "mufg-result-d-xml-table-v1",
+        )
+        .unwrap()
+        .status(),
+        NormalizedAllotmentStatus::NotFound
+    );
+    assert!(matches!(
+        KfintechProvider::parse_result_body(
+            &kfin_cases["unknown"].to_string(),
+            true,
+            "2026-08-29T12:00:00Z",
+            "kfin-result-data-array-v1",
+        ),
+        Err(sanket_allotment::ProviderError::Unknown(_))
+    ));
 }

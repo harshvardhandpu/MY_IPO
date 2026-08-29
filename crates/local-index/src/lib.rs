@@ -181,15 +181,39 @@ INSERT OR IGNORE INTO schema_migrations(version) VALUES (5);
 COMMIT;
 "#;
 
+// Schema v6: public registrar metadata captured with the submitted application.
+const SCHEMA_V6: &str = r#"
+BEGIN;
+ALTER TABLE applications ADD COLUMN registrar_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN registrar_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN official_status_url TEXT;
+ALTER TABLE applications ADD COLUMN expected_allotment_date TEXT;
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (6);
+COMMIT;
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
 }
 
 pub type FriendProjectionRow = (String, String, String, String, i64);
 pub type AllocationProjectionRow = (String, String, String, i64, i64);
-pub type SubmittedApplicationRow = (String, String, String, i64, u32);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedApplicationState {
+    pub application_id: String,
+    pub session_id: String,
+    pub ipo_name: String,
+    pub planned_amount_paise: i64,
+    pub account_count: u32,
+    pub registrar_id: String,
+    pub registrar_name: String,
+    pub official_status_url: Option<String>,
+    pub expected_allotment_date: Option<String>,
+}
 pub type AllotmentJobRow = (String, String, String, String, String, String);
 pub type AllotmentAttemptRow = (String, String, String, Option<i64>, Option<i64>, String);
+pub type EstimatedProfitBase = (String, Option<i64>, Option<String>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllotmentJobExecutionRow {
@@ -279,6 +303,14 @@ impl LocalIndex {
         )?;
         if version < 5 {
             connection.execute_batch(SCHEMA_V5)?;
+        }
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if version < 6 {
+            connection.execute_batch(SCHEMA_V6)?;
         }
         Ok(Self { connection })
     }
@@ -476,12 +508,33 @@ impl LocalIndex {
                 session_id,
                 ipo_name,
                 planned_amount_paise,
+                registrar_id,
+                registrar_name,
+                official_status_url,
+                expected_allotment_date,
             } => {
                 self.connection.execute(
-                    "INSERT INTO applications(id, session_id, ipo_name, planned_amount_paise)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(id) DO UPDATE SET ipo_name=excluded.ipo_name, planned_amount_paise=excluded.planned_amount_paise",
-                    params![application_id, session_id, ipo_name, planned_amount_paise],
+                    "INSERT INTO applications(
+                         id, session_id, ipo_name, planned_amount_paise, registrar_id,
+                         registrar_name, official_status_url, expected_allotment_date
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(id) DO UPDATE SET
+                         ipo_name=excluded.ipo_name,
+                         planned_amount_paise=excluded.planned_amount_paise,
+                         registrar_id=excluded.registrar_id,
+                         registrar_name=excluded.registrar_name,
+                         official_status_url=excluded.official_status_url,
+                         expected_allotment_date=excluded.expected_allotment_date",
+                    params![
+                        application_id,
+                        session_id,
+                        ipo_name,
+                        planned_amount_paise,
+                        registrar_id,
+                        registrar_name,
+                        official_status_url,
+                        expected_allotment_date
+                    ],
                 )?;
                 self.connection.execute(
                     "INSERT OR IGNORE INTO ipos(id, typed_name) VALUES (?1, ?2)",
@@ -835,23 +888,29 @@ impl LocalIndex {
     /// Submitted IPO applications eligible for allotment checks.
     pub fn list_submitted_applications(
         &self,
-    ) -> Result<Vec<SubmittedApplicationRow>, LocalIndexError> {
+    ) -> Result<Vec<SubmittedApplicationState>, LocalIndexError> {
         let mut stmt = self.connection.prepare(
             "SELECT app.id, app.session_id, app.ipo_name, app.planned_amount_paise,
-                    (SELECT COUNT(*) FROM allocations a WHERE a.application_id = app.id)
+                    (SELECT COUNT(*) FROM allocations a WHERE a.application_id = app.id),
+                    app.registrar_id, app.registrar_name, app.official_status_url,
+                    app.expected_allotment_date
              FROM applications app
              JOIN investment_sessions s ON s.id = app.session_id
              WHERE s.status = 'SUBMITTED'
              ORDER BY app.id",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get::<_, i64>(4)? as u32,
-            ))
+            Ok(SubmittedApplicationState {
+                application_id: row.get(0)?,
+                session_id: row.get(1)?,
+                ipo_name: row.get(2)?,
+                planned_amount_paise: row.get(3)?,
+                account_count: row.get::<_, i64>(4)? as u32,
+                registrar_id: row.get(5)?,
+                registrar_name: row.get(6)?,
+                official_status_url: row.get(7)?,
+                expected_allotment_date: row.get(8)?,
+            })
         })?;
         let mut out = Vec::new();
         for r in rows {
@@ -873,6 +932,38 @@ impl LocalIndex {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    pub fn allocation_amount_for_account(
+        &self,
+        application_id: &str,
+        account_id: &str,
+    ) -> Result<Option<i64>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT amount_paise FROM allocations WHERE application_id=?1 AND account_id=?2 LIMIT 1",
+                params![application_id, account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
+    }
+
+    /// `(basis, estimated_profit_paise, provenance)`.
+    pub fn estimated_profit_for_account(
+        &self,
+        application_id: &str,
+        account_id: &str,
+    ) -> Result<Option<EstimatedProfitBase>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT basis, estimated_profit_paise, provenance
+                 FROM estimated_profit_bases WHERE application_id=?1 AND account_id=?2",
+                params![application_id, account_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
     }
 
     pub fn list_allotment_jobs(&self) -> Result<Vec<AllotmentJobRow>, LocalIndexError> {
@@ -997,11 +1088,21 @@ impl LocalIndex {
     }
 
     pub fn request_allotment_cancel(&self, job_id: &str) -> Result<bool, LocalIndexError> {
-        Ok(self.connection.execute(
-            "UPDATE allotment_jobs SET cancel_requested=1, updated_at=CURRENT_TIMESTAMP
+        let tx = self.connection.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE allotment_jobs SET cancel_requested=1, status='CANCELLED', updated_at=CURRENT_TIMESTAMP
              WHERE id=?1 AND status NOT IN ('COMPLETE','CANCELLED')",
             [job_id],
-        )? == 1)
+        )?;
+        if changed == 1 {
+            tx.execute(
+                "UPDATE allotment_attempts SET status='CANCELLED', next_retry_at=NULL
+                 WHERE job_id=?1 AND status NOT IN ('ALLOTTED','NOT_ALLOTTED','NOT_FOUND','MANUAL_RESULT')",
+                [job_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed == 1)
     }
 
     pub fn resumable_allotment_job_ids(

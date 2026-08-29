@@ -24,6 +24,7 @@ pub enum AllotmentJobStatus {
     VerificationRequiredRefresh,
     PartiallyComplete,
     Complete,
+    Cancelled,
 }
 
 impl AllotmentJobStatus {
@@ -36,7 +37,24 @@ impl AllotmentJobStatus {
             Self::VerificationRequiredRefresh => "VERIFICATION_REQUIRED_REFRESH",
             Self::PartiallyComplete => "PARTIALLY_COMPLETE",
             Self::Complete => "COMPLETE",
+            Self::Cancelled => "CANCELLED",
         }
+    }
+
+    pub fn from_attempt_statuses(statuses: &[AttemptStatus]) -> Self {
+        if statuses.is_empty() {
+            return Self::Created;
+        }
+        if statuses
+            .iter()
+            .all(|status| *status == AttemptStatus::Cancelled)
+        {
+            return Self::Cancelled;
+        }
+        if statuses.iter().all(|status| status.is_final()) {
+            return Self::Complete;
+        }
+        Self::PartiallyComplete
     }
 
     pub fn can_transition_to(self, next: Self) -> bool {
@@ -57,6 +75,12 @@ impl AllotmentJobStatus {
                 | (Running, Complete)
                 | (PartiallyComplete, Running)
                 | (PartiallyComplete, Complete)
+                | (Created, Cancelled)
+                | (WaitingForProviderAvailability, Cancelled)
+                | (PreparingProviderSession, Cancelled)
+                | (VerificationRequiredRefresh, Cancelled)
+                | (Running, Cancelled)
+                | (PartiallyComplete, Cancelled)
         )
     }
 }
@@ -77,6 +101,7 @@ pub enum AttemptStatus {
     ProviderUnavailable,
     RetryableError,
     ManualResult,
+    Cancelled,
 }
 
 impl AttemptStatus {
@@ -95,6 +120,7 @@ impl AttemptStatus {
             Self::ProviderUnavailable => "PROVIDER_UNAVAILABLE",
             Self::RetryableError => "RETRYABLE_ERROR",
             Self::ManualResult => "MANUAL_RESULT",
+            Self::Cancelled => "CANCELLED",
         }
     }
 
@@ -116,7 +142,11 @@ impl AttemptStatus {
     pub const fn is_final(self) -> bool {
         matches!(
             self,
-            Self::Allotted | Self::NotAllotted | Self::NotFound | Self::ManualResult
+            Self::Allotted
+                | Self::NotAllotted
+                | Self::NotFound
+                | Self::ManualResult
+                | Self::Cancelled
         )
     }
 }

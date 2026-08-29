@@ -29,6 +29,48 @@ fn allotment_rate_limiter() -> &'static sanket_allotment::ProviderRateLimiter {
     LIMITER.get_or_init(|| sanket_allotment::ProviderRateLimiter::new(Default::default()))
 }
 
+fn execution_provider_id(
+    mode: RuntimeSecurityMode,
+    provider: sanket_allotment::ProviderId,
+) -> sanket_allotment::ProviderId {
+    if matches!(mode, RuntimeSecurityMode::DevelopmentSynthetic)
+        && provider == sanket_allotment::ProviderId::KfintechLive
+    {
+        sanket_allotment::ProviderId::KfintechFixture
+    } else {
+        provider
+    }
+}
+
+fn provider_health(provider: sanket_allotment::ProviderId) -> &'static str {
+    use sanket_allotment::{AllotmentProvider, ProviderHealth, ProviderId};
+    let health = match provider {
+        ProviderId::KfintechFixture => ProviderHealth::Available,
+        ProviderId::KfintechLive => sanket_allotment::KfintechProvider::new().health(),
+        ProviderId::BigshareLive => sanket_allotment::BigshareProvider::new().health(),
+        ProviderId::MufgIntimeLive => sanket_allotment::MufgIntimeProvider::new().health(),
+    };
+    match health {
+        ProviderHealth::Available => "AVAILABLE",
+        ProviderHealth::Degraded => "DEGRADED",
+        ProviderHealth::HumanVerificationRequired => "HUMAN_VERIFICATION_REQUIRED",
+        ProviderHealth::Broken => "BROKEN",
+        ProviderHealth::Unknown => "UNKNOWN",
+    }
+}
+
+fn allotment_provider(
+    provider: sanket_allotment::ProviderId,
+) -> Box<dyn sanket_allotment::AllotmentProvider> {
+    use sanket_allotment::ProviderId;
+    match provider {
+        ProviderId::KfintechFixture => Box::new(sanket_allotment::FixtureKfintechProvider),
+        ProviderId::KfintechLive => Box::new(sanket_allotment::KfintechProvider::new()),
+        ProviderId::BigshareLive => Box::new(sanket_allotment::BigshareProvider::new()),
+        ProviderId::MufgIntimeLive => Box::new(sanket_allotment::MufgIntimeProvider::new()),
+    }
+}
+
 fn epoch_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -173,7 +215,15 @@ impl Application {
     fn validate_allotment_provider(&self, provider_id: &str) -> Result<()> {
         match (self.security_mode, provider_id) {
             (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-fixture") => Ok(()),
-            (RuntimeSecurityMode::ProductionSecure, "kfintech-live") => {
+            // Live adapters are enqueueable in dev to reach their typed
+            // operational/human-verification states; the unattended run path
+            // still fails closed before any PAN access or network lookup.
+            (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-live")
+            | (RuntimeSecurityMode::DevelopmentSynthetic, "bigshare-live")
+            | (RuntimeSecurityMode::DevelopmentSynthetic, "mufg-intime-live") => Ok(()),
+            (RuntimeSecurityMode::ProductionSecure, "kfintech-live")
+            | (RuntimeSecurityMode::ProductionSecure, "bigshare-live")
+            | (RuntimeSecurityMode::ProductionSecure, "mufg-intime-live") => {
                 self.identity_key().map(|_| ())?;
                 if sanket_allotment::real_investor_lookup_allowed() {
                     Ok(())
@@ -182,11 +232,6 @@ impl Application {
                         "real investor lookup remains blocked pending the controlled pilot".into(),
                     ))
                 }
-            }
-            (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-live") => {
-                Err(ServiceError::Invalid(
-                    "live allotment checks require PRODUCTION_SECURE with an OS keyring".into(),
-                ))
             }
             (RuntimeSecurityMode::ProductionSecure, "kfintech-fixture") => {
                 Err(ServiceError::Invalid(
@@ -459,6 +504,12 @@ impl Application {
 
         // 2. applications + allocations
         for (idx, ipo) in req.ipos.iter().enumerate() {
+            let registrar =
+                sanket_allotment::ProviderRegistry::resolve_registrar(&ipo.registrar_id)
+                    .ok_or_else(|| ServiceError::Invalid("unsupported registrar".into()))?;
+            if let Some(date) = &ipo.expected_allotment_date {
+                reject_embedded_pan("expected allotment date", date)?;
+            }
             let app_id = format!("{session_id}-app-{idx}");
             events.push(EventEnvelope::seal(NewEvent {
                 event_id: String::new(),
@@ -475,6 +526,10 @@ impl Application {
                     session_id: session_id.clone(),
                     ipo_name: ipo.name.clone(),
                     planned_amount_paise: ipo.amount_paise,
+                    registrar_id: registrar.registrar_id.into(),
+                    registrar_name: registrar.registrar_name.into(),
+                    official_status_url: Some(registrar.official_status_url.into()),
+                    expected_allotment_date: ipo.expected_allotment_date.clone(),
                 },
             })?);
 
@@ -594,22 +649,34 @@ impl Application {
         &self,
         req: StartAllotmentRequest,
     ) -> Result<AllotmentJobReport> {
-        if self
+        let account_ids = self
             .index
-            .list_account_ids_for_application(&req.application_id)?
-            .is_empty()
-        {
+            .list_account_ids_for_application(&req.application_id)?;
+        if account_ids.is_empty() {
             return Err(ServiceError::Invalid(
                 "no allocations found for application".into(),
             ));
         }
+        if let Some((job_id, ..)) = self.index.list_allotment_jobs()?.into_iter().rev().find(
+            |(_, application_id, _, _, _, status)| {
+                application_id == &req.application_id
+                    && !matches!(status.as_str(), "COMPLETE" | "CANCELLED")
+            },
+        ) {
+            return self.get_allotment_report(&job_id);
+        }
         let job_id = format!("job-{}", uuid::Uuid::now_v7());
-        let registrar_id = req.registrar_id.unwrap_or_else(|| "kfintech".into());
-        let registrar_name = req.registrar_name.unwrap_or_else(|| "KFintech".into());
-        let provider_id = req.provider_id.unwrap_or_else(|| "kfintech-fixture".into());
-        let official_status_url = req
-            .official_status_url
-            .or_else(|| Some("https://ipostatus.kfintech.com".into()));
+        let registrar_input = req
+            .registrar_id
+            .as_deref()
+            .ok_or_else(|| ServiceError::Invalid("registrar is required".into()))?;
+        let registrar = sanket_allotment::ProviderRegistry::resolve_registrar(registrar_input)
+            .ok_or_else(|| ServiceError::Invalid("unsupported registrar".into()))?;
+        let provider = execution_provider_id(self.security_mode, registrar.provider_id);
+        let registrar_id = registrar.registrar_id.to_owned();
+        let registrar_name = registrar.registrar_name.to_owned();
+        let provider_id = provider.as_str().to_owned();
+        let official_status_url = Some(registrar.official_status_url.to_owned());
         self.validate_allotment_provider(&provider_id)?;
         reject_embedded_pan("IPO name", &req.ipo_name)?;
         reject_embedded_pan("registrar id", &registrar_id)?;
@@ -623,7 +690,7 @@ impl Application {
             aggregate_type: "allotment_job".into(),
             aggregate_id: job_id.clone(),
             aggregate_revision: 1,
-            actor_member_id: req.actor_member_id,
+            actor_member_id: req.actor_member_id.clone(),
             device_id: self.device_id.clone(),
             occurred_at: Self::now(),
             app_version: env!("CARGO_PKG_VERSION").into(),
@@ -640,17 +707,36 @@ impl Application {
             },
         })?;
         self.append_and_project(&event)?;
-        Ok(AllotmentJobReport {
-            job_id,
-            application_id: req.application_id,
-            ipo_name: req.ipo_name,
-            registrar_id,
-            registrar_name,
-            provider_id,
-            status: "CREATED".into(),
-            official_status_url,
-            accounts: Vec::new(),
-        })
+        for (index, account_id) in account_ids.iter().enumerate() {
+            let attempt_id = format!("att-{}", uuid::Uuid::now_v7());
+            let pending = EventEnvelope::seal(NewEvent {
+                event_id: String::new(),
+                aggregate_type: "allotment_attempt".into(),
+                aggregate_id: attempt_id.clone(),
+                aggregate_revision: index as u64 + 1,
+                actor_member_id: req.actor_member_id.clone(),
+                device_id: self.device_id.clone(),
+                occurred_at: Self::now(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                previous_event_hash: None,
+                payload: EventPayload::AllotmentAttemptStateUpdated {
+                    attempt_id,
+                    job_id: job_id.clone(),
+                    account_id: account_id.clone(),
+                    status: "PENDING".into(),
+                    attempt_count: 0,
+                    allotted_lots: None,
+                    allotted_shares: None,
+                    source: "AUTOMATED_PROVIDER".into(),
+                    provider_reference: None,
+                    safe_message: None,
+                    last_attempt_at: String::new(),
+                    next_retry_at: None,
+                },
+            })?;
+            self.append_and_project(&pending)?;
+        }
+        self.get_allotment_report(&job_id)
     }
 
     /// Compatibility helper for tests/direct callers: enqueue then execute once.
@@ -682,9 +768,6 @@ impl Application {
             ipo_name: job.ipo_name,
             actor_member_id: job.actor_member_id,
             registrar_id: Some(job.registrar_id),
-            registrar_name: Some(job.registrar_name),
-            official_status_url: job.official_status_url,
-            provider_id: Some(job.provider_id),
         };
         let result = self.execute_allotment_check(req, job_id.to_owned());
         let _ = self.index.release_allotment_lease(job_id, &token);
@@ -706,26 +789,148 @@ impl Application {
     }
 
     pub fn list_allotment_candidates(&self) -> Result<Vec<AllotmentCandidateRow>> {
-        Ok(self
+        let jobs = self.index.list_allotment_jobs()?;
+        let mut candidates = Vec::new();
+        for application in self.index.list_submitted_applications()? {
+            let descriptor =
+                sanket_allotment::ProviderRegistry::resolve_registrar(&application.registrar_id);
+            let (provider_id, provider_name, provider_health) = descriptor
+                .map(|provider| {
+                    let provider_id =
+                        execution_provider_id(self.security_mode, provider.provider_id);
+                    (
+                        provider_id.as_str().to_owned(),
+                        provider.registrar_name.to_owned(),
+                        provider_health(provider_id).to_string(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    (
+                        "unsupported".into(),
+                        "Unsupported registrar".into(),
+                        "UNKNOWN".into(),
+                    )
+                });
+            let latest_job = jobs
+                .iter()
+                .rev()
+                .find(|(_, application_id, ..)| application_id == &application.application_id);
+            let (pending_count, final_count, last_checked, overall_job_state) =
+                if let Some((job_id, ..)) = latest_job {
+                    let report = self.get_allotment_report(job_id)?;
+                    let final_count = report
+                        .accounts
+                        .iter()
+                        .filter(|row| {
+                            matches!(
+                                row.status.as_str(),
+                                "ALLOTTED"
+                                    | "NOT_ALLOTTED"
+                                    | "NOT_FOUND"
+                                    | "MANUAL_RESULT"
+                                    | "CANCELLED"
+                            )
+                        })
+                        .count() as u32;
+                    let last_checked = report
+                        .accounts
+                        .iter()
+                        .filter_map(|row| row.checked_at.clone())
+                        .max();
+                    (
+                        report.accounts.len() as u32 - final_count,
+                        final_count,
+                        last_checked,
+                        report.status,
+                    )
+                } else {
+                    (application.account_count, 0, None, "READY_TO_CHECK".into())
+                };
+            candidates.push(AllotmentCandidateRow {
+                application_id: application.application_id,
+                session_id: application.session_id,
+                ipo_name: application.ipo_name,
+                planned_amount_paise: application.planned_amount_paise,
+                account_count: application.account_count,
+                registrar_id: application.registrar_id,
+                registrar_name: application.registrar_name,
+                provider_id,
+                provider_name,
+                official_status_url: application.official_status_url,
+                provider_health,
+                expected_allotment_date: application.expected_allotment_date,
+                pending_count,
+                final_count,
+                last_checked,
+                overall_job_state,
+            });
+        }
+        Ok(candidates)
+    }
+
+    fn allotment_report_row(
+        &self,
+        job_id: &str,
+        application_id: &str,
+        registrar_id: &str,
+        provider_id: &str,
+        account_id: &str,
+    ) -> Result<AllotmentReportRow> {
+        let attempt = self
             .index
-            .list_submitted_applications()?
-            .into_iter()
-            .map(
-                |(application_id, session_id, ipo_name, planned_amount_paise, account_count)| {
-                    AllotmentCandidateRow {
-                        application_id,
-                        session_id,
-                        ipo_name,
-                        planned_amount_paise,
-                        account_count,
-                        registrar_id: "kfintech".into(),
-                        registrar_name: "KFintech".into(),
-                        official_status_url: Some("https://ipostatus.kfintech.com".into()),
-                        provider_status: "AVAILABLE".into(),
-                    }
-                },
-            )
-            .collect())
+            .allotment_attempt(job_id, account_id)?
+            .ok_or_else(|| ServiceError::Invalid("allotment attempt not found".into()))?;
+        let (display_name, account_kind) = self.index.display_label_for_account(account_id)?;
+        let masked_pan = self
+            .index
+            .masked_pan_for_account(account_id)?
+            .unwrap_or_else(|| "[MASKED]".into());
+        let application_amount_paise = self
+            .index
+            .allocation_amount_for_account(application_id, account_id)?
+            .unwrap_or(0);
+        let (profit_basis, estimated_profit_paise, profit_provenance) = self
+            .index
+            .estimated_profit_for_account(application_id, account_id)?
+            .unwrap_or_else(|| ("UNAVAILABLE".into(), None, None));
+        let provenance = if attempt.source == "MANUAL" {
+            "OWNER_REPORTED_MANUAL"
+        } else if matches!(
+            attempt.status.as_str(),
+            "ALLOTTED" | "NOT_ALLOTTED" | "NOT_FOUND"
+        ) {
+            "CONFIRMED_PROVIDER_RESPONSE"
+        } else {
+            "PROVIDER_OPERATIONAL_STATE"
+        };
+        let human_verification_state = match attempt.status.as_str() {
+            "NEEDS_HUMAN_VERIFICATION" => Some("REQUIRED".into()),
+            "VERIFICATION_REQUIRED_REFRESH" => Some("REFRESH_REQUIRED".into()),
+            _ => None,
+        };
+        Ok(AllotmentReportRow {
+            attempt_id: attempt.id,
+            account_id: account_id.to_owned(),
+            display_name,
+            account_kind,
+            masked_pan,
+            status: attempt.status,
+            allotted_lots: attempt.allotted_lots.map(|value| value as u32),
+            allotted_shares: attempt.allotted_shares.map(|value| value as u64),
+            provider_id: provider_id.to_owned(),
+            registrar_id: registrar_id.to_owned(),
+            source: attempt.source,
+            provenance: provenance.into(),
+            application_amount_paise,
+            checked_at: attempt.last_attempt_at.filter(|value| !value.is_empty()),
+            safe_provider_reference: attempt.provider_reference,
+            safe_message: attempt.safe_message,
+            next_retry_at: attempt.next_retry_at,
+            human_verification_state,
+            estimated_profit_paise,
+            profit_basis,
+            profit_provenance,
+        })
     }
 
     fn execute_allotment_check(
@@ -742,17 +947,19 @@ impl Application {
             ));
         }
 
-        let registrar_id = req.registrar_id.unwrap_or_else(|| "kfintech".into());
-        let registrar_name = req.registrar_name.unwrap_or_else(|| "KFintech".into());
-        let provider_id = req
-            .provider_id
-            .clone()
-            .unwrap_or_else(|| "kfintech-fixture".to_owned());
-        let official_url = req
+        let job = self
+            .index
+            .allotment_job_execution(&job_id)?
+            .ok_or_else(|| ServiceError::Invalid("allotment job not found".into()))?;
+        let registrar_id = job.registrar_id.clone();
+        let registrar_name = job.registrar_name.clone();
+        let provider_id = job.provider_id.clone();
+        let official_url = job
             .official_status_url
+            .clone()
             .unwrap_or_else(|| "https://ipostatus.kfintech.com".into());
 
-        let job = sanket_allotment::AllotmentCheckJob::create(
+        let _job = sanket_allotment::AllotmentCheckJob::create(
             job_id.clone(),
             req.application_id.clone(),
             req.session_id.clone(),
@@ -780,16 +987,14 @@ impl Application {
         })?;
         self.append_and_project(&running_event)?;
 
-        let fixture = sanket_allotment::FixtureKfintechProvider;
-        let live = sanket_allotment::LiveKfintechProvider::new();
-        let use_live = provider_id == "kfintech-live";
+        let provider_kind = sanket_allotment::ProviderRegistry::resolve(&provider_id)
+            .ok_or_else(|| ServiceError::Invalid("unsupported allotment provider".into()))?;
+        let provider = allotment_provider(provider_kind);
         let key_provider = self.key_provider_for_sensitive()?;
         let mut sensitive =
             sanket_identity_security::SensitiveIdentityService::new_boxed(key_provider);
         let mut report_rows = Vec::new();
         let mut rev = 3u64;
-        let provider_kind = sanket_allotment::ProviderRegistry::resolve(&provider_id)
-            .ok_or_else(|| ServiceError::Invalid("unsupported allotment provider".into()))?;
         let policy = sanket_allotment::ProviderRatePolicy::for_provider(provider_kind);
         let mut cancelled = false;
 
@@ -822,24 +1027,13 @@ impl Application {
                     || !retry_due
             });
             if paused {
-                let a = previous.expect("checked above");
-                let (label, kind) = self.index.display_label_for_account(account_id)?;
-                let masked = self
-                    .index
-                    .masked_pan_for_account(account_id)?
-                    .unwrap_or_else(|| "[MASKED]".into());
-                report_rows.push(AllotmentReportRow {
-                    attempt_id: a.id,
-                    account_id: account_id.clone(),
-                    display_name: label,
-                    account_kind: kind,
-                    masked_pan: masked,
-                    status: a.status,
-                    allotted_lots: a.allotted_lots.map(|v| v as u32),
-                    allotted_shares: a.allotted_shares.map(|v| v as u64),
-                    provider_id: provider_id.clone(),
-                    source: a.source,
-                });
+                report_rows.push(self.allotment_report_row(
+                    &job_id,
+                    &req.application_id,
+                    &registrar_id,
+                    &provider_id,
+                    account_id,
+                )?);
                 continue;
             }
             let attempt_id = previous
@@ -851,95 +1045,116 @@ impl Application {
                 .map(|a| a.attempt_count.saturating_add(1))
                 .unwrap_or(1);
             allotment_rate_limiter().wait_turn(&provider_id);
-            let envelope = self
-                .vault
-                .load_member_identity(account_id)
-                .or_else(|_| self.vault.load_friend_identity(account_id))?;
             let masked = self
                 .index
                 .masked_pan_for_account(account_id)?
                 .unwrap_or_else(|| "[MASKED]".into());
-            let masked_pan = sanket_identity_security::MaskedPan::from_display(masked.clone())
-                .unwrap_or_else(|_| sanket_identity_security::MaskedPan::from_parts("AAAAA", "A"));
-            let record = sanket_identity_security::SensitiveIdentityRecord::from_stored(
-                account_id.clone(),
-                masked_pan,
-                envelope,
-            );
-
-            let (status, lots, shares, pref, source) = sensitive
-                .with_pan(
-                    &record,
-                    sanket_identity_security::SensitivePurpose::AllotmentCheck,
-                    &req.actor_member_id,
-                    |pan_str| {
-                        let pan = Pan::parse(pan_str).map_err(|e| e.to_string())?;
-                        let ctx = sanket_allotment::AllotmentLookupContext {
-                            job_id: job_id.clone(),
-                            attempt_id: attempt_id.clone(),
-                            account_id: account_id.clone(),
-                            issue: sanket_allotment::RegistrarIssue {
-                                registrar_id: registrar_id.clone(),
-                                registrar_name: registrar_name.clone(),
-                                official_status_url: Some(official_url.clone()),
-                                issue_code: None,
-                                ipo_name: req.ipo_name.clone(),
+            let ctx = sanket_allotment::AllotmentLookupContext {
+                job_id: job_id.clone(),
+                attempt_id: attempt_id.clone(),
+                account_id: account_id.clone(),
+                issue: sanket_allotment::RegistrarIssue {
+                    registrar_id: registrar_id.clone(),
+                    registrar_name: registrar_name.clone(),
+                    official_status_url: Some(official_url.clone()),
+                    issue_code: None,
+                    ipo_name: req.ipo_name.clone(),
+                },
+            };
+            let source = if provider_kind == sanket_allotment::ProviderId::KfintechFixture {
+                "FIXTURE"
+            } else {
+                "AUTOMATED_PROVIDER"
+            };
+            let prepared = provider.prepare_lookup(&ctx);
+            let (status, lots, shares, pref, source) = match prepared {
+                Ok(Some(result)) => (
+                    result.status().as_str().to_owned(),
+                    result.allotted_lots(),
+                    result.allotted_shares(),
+                    result.provider_reference().map(str::to_owned),
+                    source.to_owned(),
+                ),
+                Err(error) => (
+                    error.to_status().as_str().to_owned(),
+                    None,
+                    None,
+                    None,
+                    source.to_owned(),
+                ),
+                Ok(None)
+                    if provider_kind == sanket_allotment::ProviderId::KfintechFixture
+                        || sanket_allotment::real_investor_lookup_allowed() =>
+                {
+                    let envelope = self
+                        .vault
+                        .load_member_identity(account_id)
+                        .or_else(|_| self.vault.load_friend_identity(account_id))?;
+                    let masked_pan =
+                        sanket_identity_security::MaskedPan::from_display(masked.clone())
+                            .unwrap_or_else(|_| {
+                                sanket_identity_security::MaskedPan::from_parts("AAAAA", "A")
+                            });
+                    let record = sanket_identity_security::SensitiveIdentityRecord::from_stored(
+                        account_id.clone(),
+                        masked_pan,
+                        envelope,
+                    );
+                    let result = sensitive
+                        .with_pan(
+                            &record,
+                            sanket_identity_security::SensitivePurpose::AllotmentCheck,
+                            &req.actor_member_id,
+                            |pan_str| {
+                                let pan = Pan::parse(pan_str).map_err(|e| e.to_string())?;
+                                Ok(match provider.check_allotment(&ctx, &pan) {
+                                    Ok(result) => (
+                                        result.status().as_str().to_owned(),
+                                        result.allotted_lots(),
+                                        result.allotted_shares(),
+                                        result.provider_reference().map(str::to_owned),
+                                        source.to_owned(),
+                                    ),
+                                    Err(error) => (
+                                        error.to_status().as_str().to_owned(),
+                                        None,
+                                        None,
+                                        None,
+                                        source.to_owned(),
+                                    ),
+                                })
                             },
-                        };
-                        match if use_live {
-                            sanket_allotment::AllotmentProvider::check_allotment(&live, &ctx, &pan)
-                        } else {
-                            sanket_allotment::AllotmentProvider::check_allotment(
-                                &fixture, &ctx, &pan,
-                            )
-                        } {
-                            Ok(r) => Ok((
-                                r.status().as_str().to_owned(),
-                                r.allotted_lots(),
-                                r.allotted_shares(),
-                                r.provider_reference().map(str::to_owned),
-                                if use_live {
-                                    "AUTOMATED".to_owned()
-                                } else {
-                                    "FIXTURE".to_owned()
-                                },
-                            )),
-                            Err(e) => Ok((
-                                e.to_status().as_str().to_owned(),
-                                None,
-                                None,
-                                None,
-                                if use_live {
-                                    "AUTOMATED".to_owned()
-                                } else {
-                                    "FIXTURE".to_owned()
-                                },
-                            )),
-                        }
-                    },
-                )
-                .map_err(|e| ServiceError::Invalid(e.to_string()))?
-                .map_err(ServiceError::Invalid)?;
-
-            // Persist purpose-scoped access audit without sensitive values.
-            if let Some(audit) = sensitive.take_last_audit() {
-                let audit_event = EventEnvelope::seal(NewEvent {
-                    event_id: String::new(),
-                    aggregate_type: "sensitive_identity".into(),
-                    aggregate_id: account_id.clone(),
-                    aggregate_revision: attempt_count as u64,
-                    actor_member_id: req.actor_member_id.clone(),
-                    device_id: self.device_id.clone(),
-                    occurred_at: audit.occurred_at,
-                    app_version: env!("CARGO_PKG_VERSION").into(),
-                    previous_event_hash: None,
-                    payload: EventPayload::SensitiveIdentityAccessed {
-                        account_id: audit.account_id,
-                        purpose: audit.purpose,
-                    },
-                })?;
-                self.append_and_project(&audit_event)?;
-            }
+                        )
+                        .map_err(|error| ServiceError::Invalid(error.to_string()))?
+                        .map_err(ServiceError::Invalid)?;
+                    if let Some(audit) = sensitive.take_last_audit() {
+                        let audit_event = EventEnvelope::seal(NewEvent {
+                            event_id: String::new(),
+                            aggregate_type: "sensitive_identity".into(),
+                            aggregate_id: account_id.clone(),
+                            aggregate_revision: attempt_count as u64,
+                            actor_member_id: req.actor_member_id.clone(),
+                            device_id: self.device_id.clone(),
+                            occurred_at: audit.occurred_at,
+                            app_version: env!("CARGO_PKG_VERSION").into(),
+                            previous_event_hash: None,
+                            payload: EventPayload::SensitiveIdentityAccessed {
+                                account_id: audit.account_id,
+                                purpose: audit.purpose,
+                            },
+                        })?;
+                        self.append_and_project(&audit_event)?;
+                    }
+                    result
+                }
+                Ok(None) => (
+                    "PROVIDER_UNAVAILABLE".into(),
+                    None,
+                    None,
+                    None,
+                    source.to_owned(),
+                ),
+            };
 
             let retryable = matches!(
                 status.as_str(),
@@ -996,19 +1211,13 @@ impl Application {
                 provider_id, job_id, account_id, attempt_count, status
             );
 
-            let (label, kind) = self.index.display_label_for_account(account_id)?;
-            report_rows.push(AllotmentReportRow {
-                attempt_id,
-                account_id: account_id.clone(),
-                display_name: label,
-                account_kind: kind,
-                masked_pan: masked,
-                status,
-                allotted_lots: lots,
-                allotted_shares: shares,
-                provider_id: provider_id.clone(),
-                source,
-            });
+            report_rows.push(self.allotment_report_row(
+                &job_id,
+                &req.application_id,
+                &registrar_id,
+                &provider_id,
+                account_id,
+            )?);
         }
 
         let mut has_retryable = false;
@@ -1023,8 +1232,20 @@ impl Application {
                 }
             }
         }
+        let final_count = report_rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.status.as_str(),
+                    "ALLOTTED" | "NOT_ALLOTTED" | "NOT_FOUND" | "MANUAL_RESULT" | "CANCELLED"
+                )
+            })
+            .count() as u32;
+        let pending_count = report_rows.len() as u32 - final_count;
         let final_status = if cancelled {
             "CANCELLED"
+        } else if final_count > 0 && pending_count > 0 {
+            "PARTIALLY_COMPLETE"
         } else if report_rows
             .iter()
             .any(|r| r.status == "NEEDS_HUMAN_VERIFICATION")
@@ -1059,6 +1280,10 @@ impl Application {
         })?;
         self.append_and_project(&final_event)?;
 
+        let checked_at = report_rows
+            .iter()
+            .filter_map(|row| row.checked_at.clone())
+            .max();
         let _ = job; // domain object validated construction
         Ok(AllotmentJobReport {
             job_id,
@@ -1069,6 +1294,9 @@ impl Application {
             provider_id,
             status: final_status.into(),
             official_status_url: Some(official_url),
+            checked_at,
+            final_count,
+            pending_count,
             accounts: report_rows,
         })
     }
@@ -1080,25 +1308,29 @@ impl Application {
             .ok_or_else(|| ServiceError::Invalid("allotment job not found".into()))?;
         let attempts = self.index.list_allotment_attempts(&job.id)?;
         let mut accounts = Vec::new();
-        for (attempt_id, account_id, st, lots, shares, source) in attempts {
-            let (label, kind) = self.index.display_label_for_account(&account_id)?;
-            let masked = self
-                .index
-                .masked_pan_for_account(&account_id)?
-                .unwrap_or_else(|| "[MASKED]".into());
-            accounts.push(AllotmentReportRow {
-                attempt_id,
-                account_id,
-                display_name: label,
-                account_kind: kind,
-                masked_pan: masked,
-                status: st,
-                allotted_lots: lots.map(|v| v as u32),
-                allotted_shares: shares.map(|v| v as u64),
-                provider_id: job.provider_id.clone(),
-                source,
-            });
+        for (_, account_id, ..) in attempts {
+            accounts.push(self.allotment_report_row(
+                &job.id,
+                &job.application_id,
+                &job.registrar_id,
+                &job.provider_id,
+                &account_id,
+            )?);
         }
+        let checked_at = accounts
+            .iter()
+            .filter_map(|row| row.checked_at.clone())
+            .max();
+        let final_count = accounts
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.status.as_str(),
+                    "ALLOTTED" | "NOT_ALLOTTED" | "NOT_FOUND" | "MANUAL_RESULT" | "CANCELLED"
+                )
+            })
+            .count() as u32;
+        let pending_count = accounts.len() as u32 - final_count;
         Ok(AllotmentJobReport {
             job_id: job.id,
             application_id: job.application_id,
@@ -1108,6 +1340,9 @@ impl Application {
             provider_id: job.provider_id,
             status: job.status,
             official_status_url: job.official_status_url,
+            checked_at,
+            final_count,
+            pending_count,
             accounts,
         })
     }
@@ -1215,23 +1450,13 @@ impl Application {
             },
         })?;
         self.append_and_project(&status_event)?;
-        let (label, kind) = self.index.display_label_for_account(&req.account_id)?;
-        let masked = self
-            .index
-            .masked_pan_for_account(&req.account_id)?
-            .unwrap_or_else(|| "[MASKED]".into());
-        Ok(AllotmentReportRow {
-            attempt_id,
-            account_id: req.account_id,
-            display_name: label,
-            account_kind: kind,
-            masked_pan: masked,
-            status: "MANUAL_RESULT".into(),
-            allotted_lots: req.allotted_lots,
-            allotted_shares: req.allotted_shares,
-            provider_id: "manual".into(),
-            source: "MANUAL".into(),
-        })
+        self.allotment_report_row(
+            &req.job_id,
+            &job.application_id,
+            &job.registrar_id,
+            &job.provider_id,
+            &req.account_id,
+        )
     }
 
     pub fn estimate_profit(&self, req: EstimateProfitRequest) -> Result<EstimatedProfitDto> {
@@ -1454,6 +1679,8 @@ pub struct SubmitIpoInput {
     pub name: String,
     pub amount_paise: i64,
     pub account_ids: Vec<String>,
+    pub registrar_id: String,
+    pub expected_allotment_date: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1506,8 +1733,15 @@ pub struct AllotmentCandidateRow {
     pub account_count: u32,
     pub registrar_id: String,
     pub registrar_name: String,
+    pub provider_id: String,
+    pub provider_name: String,
     pub official_status_url: Option<String>,
-    pub provider_status: String,
+    pub provider_health: String,
+    pub expected_allotment_date: Option<String>,
+    pub pending_count: u32,
+    pub final_count: u32,
+    pub last_checked: Option<String>,
+    pub overall_job_state: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1517,9 +1751,6 @@ pub struct StartAllotmentRequest {
     pub ipo_name: String,
     pub actor_member_id: String,
     pub registrar_id: Option<String>,
-    pub registrar_name: Option<String>,
-    pub official_status_url: Option<String>,
-    pub provider_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1533,7 +1764,18 @@ pub struct AllotmentReportRow {
     pub allotted_lots: Option<u32>,
     pub allotted_shares: Option<u64>,
     pub provider_id: String,
+    pub registrar_id: String,
     pub source: String,
+    pub provenance: String,
+    pub application_amount_paise: i64,
+    pub checked_at: Option<String>,
+    pub safe_provider_reference: Option<String>,
+    pub safe_message: Option<String>,
+    pub next_retry_at: Option<String>,
+    pub human_verification_state: Option<String>,
+    pub estimated_profit_paise: Option<i64>,
+    pub profit_basis: String,
+    pub profit_provenance: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1546,6 +1788,9 @@ pub struct AllotmentJobReport {
     pub provider_id: String,
     pub status: String,
     pub official_status_url: Option<String>,
+    pub checked_at: Option<String>,
+    pub final_count: u32,
+    pub pending_count: u32,
     pub accounts: Vec<AllotmentReportRow>,
 }
 

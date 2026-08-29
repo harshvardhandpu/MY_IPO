@@ -81,6 +81,14 @@ pub enum EventPayload {
         session_id: String,
         ipo_name: String,
         planned_amount_paise: i64,
+        #[serde(default)]
+        registrar_id: String,
+        #[serde(default)]
+        registrar_name: String,
+        #[serde(default)]
+        official_status_url: Option<String>,
+        #[serde(default)]
+        expected_allotment_date: Option<String>,
     },
     /// A final allocation was added (account-scoped; no PAN).
     AllocationAdded {

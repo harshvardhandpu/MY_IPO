@@ -51,6 +51,8 @@ interface IpoDraft {
   id: string;
   name: string;
   amountRupees: string;
+  registrarId: string;
+  expectedAllotmentDate: string;
   included: boolean;
 }
 
@@ -65,8 +67,15 @@ interface AllotmentCandidate {
   account_count: number;
   registrar_id: string;
   registrar_name: string;
+  provider_id: string;
+  provider_name: string;
   official_status_url?: string | null;
-  provider_status: string;
+  provider_health: string;
+  expected_allotment_date?: string | null;
+  pending_count: number;
+  final_count: number;
+  last_checked?: string | null;
+  overall_job_state: string;
 }
 
 interface AllotmentReportRow {
@@ -79,7 +88,18 @@ interface AllotmentReportRow {
   allotted_lots?: number | null;
   allotted_shares?: number | null;
   provider_id: string;
+  registrar_id: string;
   source: string;
+  provenance: string;
+  application_amount_paise: number;
+  checked_at?: string | null;
+  safe_provider_reference?: string | null;
+  safe_message?: string | null;
+  next_retry_at?: string | null;
+  human_verification_state?: string | null;
+  estimated_profit_paise?: number | null;
+  profit_basis: string;
+  profit_provenance?: string | null;
 }
 
 interface AllotmentJobReport {
@@ -91,6 +111,9 @@ interface AllotmentJobReport {
   provider_id: string;
   status: string;
   official_status_url?: string | null;
+  checked_at?: string | null;
+  final_count: number;
+  pending_count: number;
   accounts: AllotmentReportRow[];
 }
 
@@ -137,6 +160,23 @@ function formatRupees(paise: number): string {
     currency: "INR",
     maximumFractionDigits: 0,
   }).format(paise / 100);
+}
+
+function allotmentStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    ALLOTTED: "Allotted",
+    NOT_ALLOTTED: "Not Allotted",
+    NOT_FOUND: "Not Found",
+    NEEDS_HUMAN_VERIFICATION: "Verification Required",
+    PROVIDER_UNAVAILABLE: "Provider Unavailable",
+    RETRYABLE_ERROR: "Retry Required",
+    RATE_LIMITED: "Rate Limited",
+    UNKNOWN: "Unknown",
+    PENDING: "Pending",
+    CANCELLED: "Cancelled",
+    MANUAL_RESULT: "Manual Result",
+  };
+  return labels[status] ?? status.replaceAll("_", " ").toLowerCase();
 }
 
 function Mark() {
@@ -702,7 +742,14 @@ function InvestView({
   const sessionId = useRef(newId("session"));
   const [dailyRupees, setDailyRupees] = useState("");
   const [ipos, setIpos] = useState<IpoDraft[]>([
-    { id: newId("ipo"), name: "", amountRupees: "", included: true },
+    {
+      id: newId("ipo"),
+      name: "",
+      amountRupees: "",
+      registrarId: "kfintech",
+      expectedAllotmentDate: "",
+      included: true,
+    },
   ]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [recommendation, setRecommendation] = useState<CheckResponse | null>(null);
@@ -788,6 +835,8 @@ function InvestView({
               name: ipo.name.trim(),
               amount_paise: paiseFromRupees(ipo.amountRupees),
               account_ids: accountIds,
+              registrar_id: ipo.registrarId,
+              expected_allotment_date: ipo.expectedAllotmentDate || null,
             })),
         },
       });
@@ -848,6 +897,27 @@ function InvestView({
                   />
                 </label>
                 <label>
+                  Registrar
+                  <select
+                    aria-label="Registrar"
+                    value={ipo.registrarId}
+                    onChange={(e) => updateIpo(ipo.id, { registrarId: e.target.value })}
+                  >
+                    <option value="kfintech">KFintech</option>
+                    <option value="bigshare">Bigshare Services</option>
+                    <option value="mufg_intime">MUFG Intime India</option>
+                  </select>
+                </label>
+                <label>
+                  Expected allotment date
+                  <input
+                    aria-label="Expected allotment date"
+                    type="date"
+                    value={ipo.expectedAllotmentDate}
+                    onChange={(e) => updateIpo(ipo.id, { expectedAllotmentDate: e.target.value })}
+                  />
+                </label>
+                <label>
                   Amount per account (₹)
                   <input
                     inputMode="decimal"
@@ -875,7 +945,14 @@ function InvestView({
               onClick={() =>
                 setIpos((current) => [
                   ...current,
-                  { id: newId("ipo"), name: "", amountRupees: "", included: true },
+                  {
+                    id: newId("ipo"),
+                    name: "",
+                    amountRupees: "",
+                    registrarId: "kfintech",
+                    expectedAllotmentDate: "",
+                    included: true,
+                  },
                 ])
               }
               type="button"
@@ -1099,7 +1176,6 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
   const [selected, setSelected] = useState<string | null>(null);
   const [report, setReport] = useState<AllotmentJobReport | null>(null);
   const [security, setSecurity] = useState<SecurityStatus | null>(null);
-  const [providerId, setProviderId] = useState("kfintech-fixture");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -1165,9 +1241,6 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
           ipo_name: candidate.ipo_name,
           actor_member_id: members[0]?.id ?? "unknown",
           registrar_id: candidate.registrar_id,
-          registrar_name: candidate.registrar_name,
-          official_status_url: candidate.official_status_url,
-          provider_id: providerId,
         },
       });
       setReport(result);
@@ -1232,15 +1305,6 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
             </span>
           </div>
         )}
-        <label className="provider-select">
-          Provider mode
-          <select value={providerId} onChange={(e) => setProviderId(e.target.value)}>
-            <option value="kfintech-fixture">KFintech fixture · synthetic only</option>
-            <option disabled={!security?.real_pan_allowed} value="kfintech-live">
-              KFintech live · OS keyring required
-            </option>
-          </select>
-        </label>
         {error && <p className="inline-error">{error}</p>}
         {message && <p className="inline-ok">{message}</p>}
         <div className="stack-list">
@@ -1257,11 +1321,16 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
               />
               <span>
                 <strong>{c.ipo_name}</strong>
+                <span>{c.registrar_name}</span>
                 <small>
-                  {c.registrar_name} · {c.account_count} account
+                  {c.account_count} account
                   {c.account_count === 1 ? "" : "s"} · {formatRupees(c.planned_amount_paise)}{" "}
-                  planned
+                  planned · {c.overall_job_state.replaceAll("_", " ").toLowerCase()}
                 </small>
+                {c.provider_health === "HUMAN_VERIFICATION_REQUIRED" && (
+                  <span>Verification required</span>
+                )}
+                {c.provider_id === "unsupported" && <span>Manual fallback required</span>}
               </span>
             </label>
           ))}
@@ -1269,7 +1338,12 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
         <footer className="action-rail">
           <button
             className="primary-button"
-            disabled={!selected || busy}
+            disabled={
+              !selected ||
+              busy ||
+              candidates.find((candidate) => candidate.application_id === selected)?.provider_id ===
+                "unsupported"
+            }
             onClick={runCheck}
             type="button"
           >
@@ -1293,7 +1367,12 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
               <p className="eyebrow">Report card</p>
               <h2>{report.ipo_name}</h2>
               <p>
-                {report.registrar_name} · {report.provider_id} · {report.status}
+                {report.registrar_name} · {report.provider_id}
+              </p>
+              <p>
+                {report.status === "PARTIALLY_COMPLETE"
+                  ? `Partially complete · ${report.final_count} of ${report.accounts.length} final`
+                  : `${allotmentStatusLabel(report.status)} · ${report.final_count} of ${report.accounts.length} final`}
               </p>
             </div>
           </div>
@@ -1303,11 +1382,32 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                 <strong>
                   {row.display_name} · {row.account_kind}
                 </strong>
+                <span>{allotmentStatusLabel(row.status)}</span>
                 <small>
-                  {row.masked_pan} · {row.status} · {row.source}
+                  {row.masked_pan} · {row.source} · {row.provenance}
                   {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
                   {row.allotted_shares != null ? ` / ${row.allotted_shares} shares` : ""}
+                  {` · ${formatRupees(row.application_amount_paise)} applied`}
                 </small>
+                {row.safe_message && <p>{row.safe_message}</p>}
+                {row.human_verification_state && report.official_status_url && (
+                  <button
+                    aria-label={`Continue Verification for ${row.display_name}`}
+                    className="secondary-button"
+                    onClick={() =>
+                      window.open(report.official_status_url ?? "", "_blank", "noopener,noreferrer")
+                    }
+                    type="button"
+                  >
+                    Continue Verification
+                  </button>
+                )}
+                {row.estimated_profit_paise != null && (
+                  <p>
+                    Estimated profit {formatRupees(row.estimated_profit_paise)} · {row.profit_basis}
+                    {row.profit_provenance ? ` · ${row.profit_provenance}` : ""}
+                  </p>
+                )}
                 {row.allotted_shares != null && row.allotted_shares > 0 && (
                   <ProfitEditor
                     actorMemberId={members[0]?.id ?? "unknown"}
@@ -1322,7 +1422,7 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
           {report.official_status_url && (
             <p>
               <a href={report.official_status_url} rel="noreferrer" target="_blank">
-                Continue on the official registrar site
+                Open Official Page
               </a>{" "}
               if CAPTCHA, OTP, or browser verification is required. Return here to save the result
               manually.
@@ -1351,8 +1451,8 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                 <label>
                   Result
                   <select value={manualResult} onChange={(e) => setManualResult(e.target.value)}>
-                    <option value="NOT_ALLOTTED">Not allotted</option>
-                    <option value="ALLOTTED">Allotted</option>
+                    <option value="NOT_ALLOTTED">Report not allotted</option>
+                    <option value="ALLOTTED">Report allotted</option>
                     <option value="UNCONFIRMED">Unconfirmed</option>
                   </select>
                 </label>

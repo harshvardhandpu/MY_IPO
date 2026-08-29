@@ -134,6 +134,8 @@ fn service_never_persists_or_emits_plaintext_identity() {
             name: "Example IPO".to_owned(),
             amount_paise: 200_000,
             account_ids: vec!["member-security".to_owned(), "friend-security".to_owned()],
+            registrar_id: "kfintech".into(),
+            expected_allotment_date: None,
         }],
     })
     .unwrap();

@@ -15,7 +15,7 @@ fn new_database_initializes_rebuildable_projection_schema() {
     let index = LocalIndex::open(&database_path).expect("database should initialize");
 
     assert_eq!(
-        5,
+        6,
         index.schema_version().expect("schema version should load")
     );
     assert!(
@@ -52,7 +52,7 @@ fn new_database_initializes_rebuildable_projection_schema() {
 
     let reopened = LocalIndex::open(&database_path).expect("database should reopen idempotently");
     assert_eq!(
-        5,
+        6,
         reopened
             .schema_version()
             .expect("schema should remain current")

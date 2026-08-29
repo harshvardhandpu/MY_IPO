@@ -628,6 +628,15 @@ pub trait AllotmentProvider: Send + Sync {
     fn health(&self) -> ProviderHealth;
     fn supports(&self, issue: &RegistrarIssue) -> bool;
 
+    /// Provider preparation that needs no investor identifier. Prepare-only
+    /// providers return a typed operational result here before PAN access.
+    fn prepare_lookup(
+        &self,
+        _context: &AllotmentLookupContext,
+    ) -> Result<Option<ProviderAllotmentResult>, ProviderError> {
+        Ok(None)
+    }
+
     /// PAN is a temporary argument. Implementations must not store it.
     fn check_allotment(
         &self,

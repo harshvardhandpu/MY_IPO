@@ -442,6 +442,15 @@ impl AllotmentProvider for MufgIntimeProvider {
             || issue.registrar_id.to_ascii_lowercase().contains("intime")
     }
 
+    fn prepare_lookup(
+        &self,
+        _context: &AllotmentLookupContext,
+    ) -> Result<Option<ProviderAllotmentResult>, ProviderError> {
+        Err(ProviderError::Retryable(
+            "mufg session/token preparation is required".into(),
+        ))
+    }
+
     fn check_allotment(
         &self,
         _context: &AllotmentLookupContext,
