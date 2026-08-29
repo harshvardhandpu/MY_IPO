@@ -1,0 +1,20 @@
+{
+  "token_ok": {
+    "d": "<html><body><input type=\"hidden\" id=\"hidToken\" name=\"hidToken\" value=\"[SYNTHETIC_TOKEN]\" /></body></html>"
+  },
+  "token_missing": {
+    "d": "<html><body><input type=\"hidden\" id=\"otherField\" value=\"x\" /></body></html>"
+  },
+  "token_empty": {
+    "d": "<html><body><input type=\"hidden\" id=\"hidToken\" name=\"hidToken\" value=\"\" /></body></html>"
+  },
+  "token_duplicate": {
+    "d": "<html><body><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN_A]\" /><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN_B]\" /></body></html>"
+  },
+  "captcha_dormant_page": {
+    "d": "<html><body><div id=\"captchaDiv\" style=\"display:none\"><img id=\"CImage\" src=\"Captcha.aspx\" /></div><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN]\" /></body></html>"
+  },
+  "captcha_required_page": {
+    "d": "<html><body><div id=\"captchaDiv\"><img id=\"CImage\" src=\"Captcha.aspx\" /></div><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN]\" /></body></html>"
+  }
+}

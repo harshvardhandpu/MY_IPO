@@ -1,0 +1,14 @@
+{
+  "discovery": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><company_id>11926</company_id><companyname>SYNTHETIC ALPHA LIMITED</companyname></Table><Table diffgr:id=\"Table2\"><company_id>11925</company_id><companyname>SYNTHETIC BETA LIMITED</companyname></Table><Table diffgr:id=\"Table3\"><company_id>11924</company_id><companyname>SYNTHETIC GAMMA LIMITED</companyname></Table><Table diffgr:id=\"Table4\"><company_id>11923</company_id><companyname>SYNTHETIC DELTA LIMITED</companyname></Table></DS></DocumentElement>"
+  },
+  "discovery_placeholder": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><company_id></company_id><companyname>--Select Company--</companyname></Table></DS></DocumentElement>"
+  },
+  "discovery_duplicate": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><company_id>11926</company_id><companyname>SYNTHETIC ALPHA LIMITED</companyname></Table><Table diffgr:id=\"Table2\"><company_id>11926</company_id><companyname>SYNTHETIC ALPHA LIMITED</companyname></Table></DS></DocumentElement>"
+  },
+  "discovery_drifted": {
+    "records": []
+  }
+}

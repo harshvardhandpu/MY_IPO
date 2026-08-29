@@ -1,0 +1,40 @@
+{
+  "allotted": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><PEMNDG>[SYNTHETIC_APPLICATION]</PEMNDG><NAME1>[SYNTHETIC_NAME]</NAME1><SHARES>70</SHARES><offer_price>150</offer_price><ALLOT>35</ALLOT><AMTADJ>0</AMTADJ><RFNDAMT>0</RFNDAMT></Table></DS></DocumentElement>"
+  },
+  "not_allotted": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><PEMNDG>[SYNTHETIC_APPLICATION]</PEMNDG><NAME1>[SYNTHETIC_NAME]</NAME1><SHARES>70</SHARES><offer_price>150</offer_price><ALLOT>0</ALLOT><AMTADJ>0</AMTADJ><RFNDAMT>0</RFNDAMT></Table></DS></DocumentElement>"
+  },
+  "pending": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><PEMNDG>[SYNTHETIC_APPLICATION]</PEMNDG><NAME1>[SYNTHETIC_NAME]</NAME1><SHARES>70</SHARES><offer_price>150</offer_price><ALLOT></ALLOT><AMTADJ>0</AMTADJ><RFNDAMT>0</RFNDAMT></Table></DS></DocumentElement>"
+  },
+  "not_found": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>No record found</Message></Table1></DS></DocumentElement>"
+  },
+  "unknown": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>[SYNTHETIC_UNKNOWN]</Message></Table1></DS></DocumentMessage>"
+  },
+  "malformed": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><PEMNDG>[SYNTHETIC_APPLICATION]</PEMNDG><ALLOT>garbled</ALLOT></Table></DS></DocumentElement>"
+  },
+  "session_expired": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>Session expired</Message></Table1></DS></DocumentElement>"
+  },
+  "token_invalid": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>Invalid request token</Message></Table1></DS></DocumentElement>"
+  },
+  "captcha_active": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>CAPTCHA required</Message></Table1></DS></DocumentElement>"
+  },
+  "captcha_dormant_page": "<div id=\"captcha\" style=\"display:none\"><img src=\"CImage.aspx\"/><input name=\"txtCaptch\"/></div>",
+  "captcha_active_page": "<div id=\"captcha\"><img src=\"CImage.aspx\"/><input name=\"txtCaptch\"/></div>",
+  "rate_limited": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>Too many requests; try later</Message></Table1></DS></DocumentElement>"
+  },
+  "provider_unavailable": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>Service Unavailable</Message></Table1></DS></DocumentElement>"
+  },
+  "drifted": {
+    "d": "<DocumentElement><DS><NewStructure><Result>x</Result></NewStructure></DS></DocumentElement>"
+  }
+}

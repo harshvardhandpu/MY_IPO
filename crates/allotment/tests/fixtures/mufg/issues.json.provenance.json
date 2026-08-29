@@ -1,0 +1,9 @@
+{
+  "provider": "mufg-intime-live",
+  "source_url": "https://in.mpms.mufg.com/Initial_Offer/public-issues.html",
+  "retrieved_at": "2026-08-28T18:09:00Z",
+  "fixture_type": "ISSUE_LIST",
+  "sanitized": true,
+  "content_sha256": "dde4f2cf6fd430b294a74b01f7ae0b0f9941a0806cb6063ff62252c3d93cba55",
+  "structural_fingerprint": "mufg-issues-companyid-xml-v1"
+}

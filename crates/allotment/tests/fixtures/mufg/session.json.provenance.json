@@ -1,0 +1,9 @@
+{
+  "provider": "mufg-intime-live",
+  "source_url": "https://in.mpms.mufg.com/Initial_Offer/public-issues.html",
+  "retrieved_at": "2026-08-28T18:09:00Z",
+  "fixture_type": "SESSION_TOKEN_CASES",
+  "sanitized": true,
+  "content_sha256": "cd35a29455bfc9d4e3beded7d4d7c64b0d7148ec2621a9c89bebc9104d22405a",
+  "structural_fingerprint": "mufg-session-hidtoken-v1"
+}

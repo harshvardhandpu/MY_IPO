@@ -8,6 +8,7 @@ mod bigshare;
 mod job;
 mod kfintech;
 mod kfintech_live;
+mod mufg_intime;
 mod profit;
 mod provider;
 mod registry;
@@ -21,6 +22,7 @@ pub use job::{
 };
 pub use kfintech::{KfintechIssue, KfintechProvider};
 pub use kfintech_live::{DiscoveredIssue, LiveKfintechProvider};
+pub use mufg_intime::{MufgCaptchaState, MufgEphemeralSession, MufgIntimeProvider, MufgIssue};
 pub use profit::{EstimatedProfit, ProfitPriceBasis};
 pub use provider::{
     AllotmentLookupContext, AllotmentProvider, BackgroundExecution, FixtureKfintechProvider,
