@@ -34,14 +34,15 @@ fn created() -> EventEnvelope {
 }
 
 #[test]
-fn schema_v4_adds_durable_runtime_tables_without_pan_columns() {
+fn schema_v5_adds_durable_runtime_tables_without_pan_columns() {
     let dir = tempfile::tempdir().unwrap();
     let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
-    assert_eq!(index.schema_version().unwrap(), 4);
+    assert_eq!(index.schema_version().unwrap(), 5);
     for table in [
         "provider_issue_mappings",
         "provider_health",
         "estimated_profit_bases",
+        "provider_challenges",
     ] {
         assert!(index.has_table(table).unwrap(), "missing {table}");
         assert!(
@@ -127,4 +128,70 @@ fn retry_metadata_is_replayable() {
         .unwrap();
     assert_eq!(replayed.attempt_count, 2);
     assert_eq!(replayed.next_retry_at.as_deref(), Some("160"));
+}
+
+#[test]
+fn restart_expires_ephemeral_continuation_and_preserves_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
+    for event in [
+        created(),
+        seal(
+            "event-running",
+            EventPayload::AllotmentJobStatusChanged {
+                job_id: "job-1".into(),
+                status: "RUNNING".into(),
+            },
+        ),
+        seal(
+            "event-attempt-running",
+            EventPayload::AllotmentAttemptStateUpdated {
+                attempt_id: "attempt-1".into(),
+                job_id: "job-1".into(),
+                account_id: "account-1".into(),
+                status: "NEEDS_HUMAN_VERIFICATION".into(),
+                attempt_count: 1,
+                allotted_lots: None,
+                allotted_shares: None,
+                source: "AUTOMATED".into(),
+                provider_reference: None,
+                safe_message: Some("verification required".into()),
+                last_attempt_at: "100".into(),
+                next_retry_at: None,
+            },
+        ),
+        seal(
+            "event-challenge",
+            EventPayload::AllotmentProviderChallengeUpdated {
+                challenge_id: "challenge-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                account_id: "account-1".into(),
+                provider_id: "bigshare-live".into(),
+                challenge_type: "CAPTCHA".into(),
+                status: "REQUIRED".into(),
+                endpoint_id: "server-1".into(),
+                continuation_reference: Some("continuation-1".into()),
+                created_at: "2026-08-29T00:00:00Z".into(),
+                expires_at: Some("2026-08-29T00:05:00Z".into()),
+            },
+        ),
+    ] {
+        index.apply_event(&event).unwrap();
+    }
+
+    index
+        .reconcile_ephemeral_allotment_state_after_restart()
+        .unwrap();
+
+    let job = index.allotment_job_execution("job-1").unwrap().unwrap();
+    assert_eq!(job.status, "VERIFICATION_REQUIRED_REFRESH");
+    let attempt = index
+        .allotment_attempt("job-1", "account-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(attempt.status, "VERIFICATION_REQUIRED_REFRESH");
+    let challenge = index.provider_challenge("challenge-1").unwrap().unwrap();
+    assert_eq!(challenge.status, "EXPIRED");
+    assert_eq!(challenge.continuation_reference, None);
 }

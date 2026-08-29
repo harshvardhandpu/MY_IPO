@@ -29,7 +29,7 @@ fn fixture_allots_for_pan_ending_a() {
     let pan = Pan::parse("ABCDE1234A").expect("pan");
     let p = FixtureKfintechProvider;
     let r = p.check_allotment(&ctx(), &pan).expect("ok");
-    assert_eq!(r.status, NormalizedAllotmentStatus::Allotted);
+    assert_eq!(r.status(), NormalizedAllotmentStatus::Allotted);
     let json = serde_json::to_string(&r).unwrap();
     assert!(!json.contains(pan.as_normalized()));
 }

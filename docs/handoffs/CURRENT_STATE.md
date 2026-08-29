@@ -1,7 +1,7 @@
 # Current State
 
 - **Branch:** `feature/multi-registrar` (from Phase 3B closeout / `b9f8c0f`)
-- **HEAD:** `03d33f4` — `docs(registrar): lock gate 2 live validation`
+- **HEAD:** Gate 4A implementation lock (parent `d2bf075`)
 - **Phase 2C:** CLOSED
 - **Phase 3A:** CLOSED (fixture allotment)
 - **Phase 3B:** CLOSED (secure key provider, live-adapter boundary, durable worker, manual/profit APIs)
@@ -10,8 +10,9 @@
 - **Gate 2 verdict:** **PASS WITH CHANGES REQUIRED**
 - **Phase 3C Gate 3:** **APPROVED AND LOCKED**
 - **Gate 3 verdict:** **PASS — IMPLEMENTATION DESIGN READY**
-- **Independent review:** PASS — Gemini 3.6 Flash, 2026-08-28
-- **Date:** 2026-08-28
+- **Phase 3C Gate 4A:** **APPROVED AND LOCKED**
+- **Gate 4A independent review:** PASS — Gemini 3.6 Flash, 2026-08-29
+- **Date:** 2026-08-29
 
 ## Security posture
 
@@ -23,6 +24,7 @@
 | Production mode + in-memory/mock provider | Rejected fail-closed |
 | Fixture provider in production | Rejected |
 | Live provider in development | Rejected |
+| Real investor lookup | **Blocked pending separately authorized controlled pilot** |
 | Linux Secret Service synthetic-key write/read/delete smoke | PASS |
 | Real PAN or live registrar request used in verification | **No** |
 
@@ -69,12 +71,23 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - Transport decision: `docs/architecture/decisions/ADR-registrar-transport.md`.
 - Full design: `docs/plans/multi-registrar-allotment/03-provider-design.md`.
 
+### Gate 4A shared runtime
+
+- Typed provider capabilities, provider ids, registry, transport/session requirements, human-verification requirements, and provider-specific retry/rate policy.
+- `ProviderAllotmentResult::confirmed_not_allotted` requires confirmed provider, issue, expected structure, recognized negative marker, and no ambiguity.
+- Durable challenge projection stores safe metadata and an opaque continuation reference only; provider cookies, request tokens, challenge material, answers, and response bodies remain ephemeral.
+- Startup reconciliation preserves jobs, clears stale leases/references, expires continuations, and moves work to `PREPARING_PROVIDER_SESSION` or `VERIFICATION_REQUIRED_REFRESH`.
+- Sanitized fixture provenance validates provider/source/retrieval/type/SHA-256/fingerprint metadata.
+- `LIVE_ADAPTER_IMPLEMENTED` and `REAL_INVESTOR_LOOKUP_AUTHORIZED` remain separate; the latter is fail-closed false.
+- Manual negative reports remain `MANUAL_RESULT`, never provider-confirmed `NOT_ALLOTTED`.
+- Review: `docs/reviews/GATE_4A_INDEPENDENT_REVIEW.md` — PASS.
+
 ## Verification
 
 - `cargo fmt --all -- --check` — PASS
 - `cargo clippy --workspace --all-targets -- -D warnings` — PASS
 - `cargo test --workspace` — PASS
-- `npm run check` on host Node 26 — PASS (119-file secret scan, formatting, TypeScript, 4 Vitest, 4 Python tests)
+- `npm run check` on host Node 26 — PASS (129-file secret scan, formatting, TypeScript, 4 Vitest, 4 Python tests)
 - `npm run build` — PASS
 - Linux Secret Service generated-key write/read/delete smoke — PASS
 - Tauri debug executable, `.deb`, and `.rpm` artifacts produced (bridge response timed out after 300 seconds, artifacts verified afterward)
@@ -92,7 +105,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Implement Gate 4A shared capability/session/runtime changes in the owner-approved order. Real PAN remains blocked.
+Implement Gate 4B KFintech live-adapter replacement against sanitized fixtures. Real PAN remains blocked.
 
 ## Canonical commands
 

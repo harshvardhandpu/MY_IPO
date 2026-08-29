@@ -32,6 +32,7 @@ pub fn spawn_allotment_worker(
     std::thread::Builder::new()
         .name("sanket-allotment-worker".into())
         .spawn(move || {
+            let mut restart_reconciled = false;
             loop {
                 match Application::with_mode(
                     device_id.clone(),
@@ -39,17 +40,28 @@ pub fn spawn_allotment_worker(
                     index_path.clone(),
                     mode,
                 ) {
-                    Ok(app) => match app.resumable_allotment_job_ids() {
-                        Ok(job_ids) => {
-                            for job_id in job_ids {
-                                if let Err(error) = app.run_allotment_job_once(&job_id) {
-                                    // Error text is sanitized at source; never log request bodies.
-                                    eprintln!("allotment worker job_id={job_id} failed: {error}");
+                    Ok(app) => {
+                        if !restart_reconciled {
+                            if let Err(error) = app.reconcile_provider_runtime_after_restart() {
+                                eprintln!("allotment worker restart reconcile failed: {error}");
+                                continue;
+                            }
+                            restart_reconciled = true;
+                        }
+                        match app.resumable_allotment_job_ids() {
+                            Ok(job_ids) => {
+                                for job_id in job_ids {
+                                    if let Err(error) = app.run_allotment_job_once(&job_id) {
+                                        // Error text is sanitized at source; never log request bodies.
+                                        eprintln!(
+                                            "allotment worker job_id={job_id} failed: {error}"
+                                        );
+                                    }
                                 }
                             }
+                            Err(error) => eprintln!("allotment worker reconcile failed: {error}"),
                         }
-                        Err(error) => eprintln!("allotment worker reconcile failed: {error}"),
-                    },
+                    }
                     Err(error) => eprintln!("allotment worker startup blocked: {error}"),
                 }
 

@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use sanket_identity_security::Pan;
 
 use crate::provider::{
-    AllotmentLookupContext, AllotmentProvider, ProviderAllotmentResult, ProviderError,
-    ProviderHealth, RegistrarIssue,
+    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, HumanVerificationRequirement,
+    IssueDiscoveryMode, LookupKeyKind, ProviderAllotmentResult, ProviderCapabilities,
+    ProviderError, ProviderHealth, ProviderTransportKind, RegistrarIssue, SessionRequirement,
 };
 
 const OFFICIAL_STATUS_URL: &str = "https://ipostatus.kfintech.com";
@@ -96,6 +97,21 @@ impl Default for LiveKfintechProvider {
 impl AllotmentProvider for LiveKfintechProvider {
     fn provider_id(&self) -> &'static str {
         "kfintech-live"
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            issue_discovery: IssueDiscoveryMode::PublicJavascript,
+            lookup_keys: vec![
+                LookupKeyKind::Pan,
+                LookupKeyKind::ApplicationNumberAndPan,
+                LookupKeyKind::DematAccount,
+            ],
+            session: SessionRequirement::None,
+            human_verification: HumanVerificationRequirement::None,
+            transport: ProviderTransportKind::Http,
+            background: BackgroundExecution::Unattended,
+        }
     }
 
     fn health(&self) -> ProviderHealth {

@@ -2,8 +2,9 @@
 
 - **Status:** APPROVED — implementation may proceed without another gate prompt
 - **Real PAN:** BLOCKED
+- **Gate 4A:** APPROVED AND LOCKED — independent review PASS
 
-1. Gate 4A — shared capability/session/runtime changes
+1. Gate 4A — shared capability/session/runtime changes — **DONE**
 2. Gate 4B — KFintech live-adapter replacement
 3. Gate 4C — Bigshare human-verification adapter
 4. Gate 4D — MUFG session/token adapter

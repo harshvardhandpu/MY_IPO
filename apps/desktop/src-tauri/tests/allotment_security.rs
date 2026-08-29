@@ -101,6 +101,19 @@ fn allotment_fixture_never_persists_plaintext_pan() {
         .expect_err("manual provenance must reject the wrong actor before persisting");
     assert!(wrong_actor_err.to_string().contains("does not own"));
 
+    let manual_negative = app
+        .record_manual_allotment_result(ManualAllotmentRequest {
+            job_id: queued.job_id.clone(),
+            account_id: report.accounts[0].account_id.clone(),
+            actor_member_id: member_id.clone(),
+            allotted_lots: None,
+            allotted_shares: None,
+            explicit_not_allotted: true,
+            note: None,
+        })
+        .expect("authorized manual result should persist");
+    assert_eq!(manual_negative.status, "MANUAL_RESULT");
+
     let live_err = app
         .enqueue_allotment_check(StartAllotmentRequest {
             application_id: apps[0].application_id.clone(),

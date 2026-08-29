@@ -160,6 +160,27 @@ INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
 COMMIT;
 "#;
 
+// Schema v5: safe human-verification continuation metadata. Provider session state stays ephemeral.
+const SCHEMA_V5: &str = r#"
+BEGIN;
+CREATE TABLE IF NOT EXISTS provider_challenges (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    challenge_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    endpoint_id TEXT NOT NULL,
+    continuation_reference TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_provider_challenges_job ON provider_challenges(job_id);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (5);
+COMMIT;
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
 }
@@ -201,6 +222,21 @@ pub struct AllotmentAttemptState {
     pub next_retry_at: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderChallengeState {
+    pub id: String,
+    pub job_id: String,
+    pub attempt_id: String,
+    pub account_id: String,
+    pub provider_id: String,
+    pub challenge_type: String,
+    pub status: String,
+    pub endpoint_id: String,
+    pub continuation_reference: Option<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum LocalIndexError {
     #[error("failed to create local index directory: {0}")]
@@ -235,6 +271,14 @@ impl LocalIndex {
         )?;
         if version < 4 {
             connection.execute_batch(SCHEMA_V4)?;
+        }
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if version < 5 {
+            connection.execute_batch(SCHEMA_V5)?;
         }
         Ok(Self { connection })
     }
@@ -594,6 +638,44 @@ impl LocalIndex {
                     ],
                 )?;
             }
+            sanket_domain::EventPayload::AllotmentProviderChallengeUpdated {
+                challenge_id,
+                job_id,
+                attempt_id,
+                account_id,
+                provider_id,
+                challenge_type,
+                status,
+                endpoint_id,
+                continuation_reference,
+                created_at,
+                expires_at,
+            } => {
+                self.connection.execute(
+                    "INSERT INTO provider_challenges(
+                        id, job_id, attempt_id, account_id, provider_id, challenge_type,
+                        status, endpoint_id, continuation_reference, created_at, expires_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                     ON CONFLICT(id) DO UPDATE SET
+                        status=excluded.status,
+                        endpoint_id=excluded.endpoint_id,
+                        continuation_reference=excluded.continuation_reference,
+                        expires_at=excluded.expires_at",
+                    params![
+                        challenge_id,
+                        job_id,
+                        attempt_id,
+                        account_id,
+                        provider_id,
+                        challenge_type,
+                        status,
+                        endpoint_id,
+                        continuation_reference,
+                        created_at,
+                        expires_at
+                    ],
+                )?;
+            }
             sanket_domain::EventPayload::AllotmentProviderDiscovered {
                 application_id,
                 registrar_id,
@@ -888,7 +970,7 @@ impl LocalIndex {
                 lease_owner_device_id=?2, lease_token=?3, lease_expires_at=?5,
                 status='RUNNING', updated_at=CAST(?4 AS TEXT)
              WHERE id=?1 AND cancel_requested=0
-               AND status IN ('CREATED','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
+               AND status IN ('CREATED','PREPARING_PROVIDER_SESSION','VERIFICATION_REQUIRED_REFRESH','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
                AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?4)",
             params![
                 job_id,
@@ -929,12 +1011,85 @@ impl LocalIndex {
         let mut stmt = self.connection.prepare(
             "SELECT id FROM allotment_jobs
              WHERE cancel_requested=0
-               AND status IN ('CREATED','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
+               AND status IN ('CREATED','PREPARING_PROVIDER_SESSION','VERIFICATION_REQUIRED_REFRESH','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
                AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?1)
              ORDER BY created_at, id",
         )?;
         let rows = stmt.query_map([now_epoch_secs as i64], |row| row.get(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(LocalIndexError::from)
+    }
+
+    /// Drop stale continuation handles after process restart while preserving durable jobs.
+    pub fn reconcile_ephemeral_allotment_state_after_restart(&self) -> Result<(), LocalIndexError> {
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE allotment_jobs SET
+                status='PREPARING_PROVIDER_SESSION',
+                lease_owner_device_id=NULL, lease_token=NULL, lease_expires_at=NULL,
+                updated_at=CURRENT_TIMESTAMP
+             WHERE status IN ('RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY',
+                              'PREPARING_PROVIDER_SESSION')
+               AND NOT EXISTS (
+                    SELECT 1 FROM provider_challenges c
+                    WHERE c.job_id=allotment_jobs.id AND c.status IN ('REQUIRED','PRESENTED')
+               )",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE allotment_jobs SET
+                status='VERIFICATION_REQUIRED_REFRESH',
+                lease_owner_device_id=NULL, lease_token=NULL, lease_expires_at=NULL,
+                updated_at=CURRENT_TIMESTAMP
+             WHERE id IN (
+                SELECT job_id FROM provider_challenges WHERE status IN ('REQUIRED','PRESENTED')
+             )",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE allotment_attempts SET
+                status='VERIFICATION_REQUIRED_REFRESH', next_retry_at=NULL
+             WHERE id IN (
+                SELECT attempt_id FROM provider_challenges WHERE status IN ('REQUIRED','PRESENTED')
+             ) AND status NOT IN ('ALLOTTED','NOT_ALLOTTED','NOT_FOUND','MANUAL_RESULT')",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE provider_challenges SET status='EXPIRED', continuation_reference=NULL
+             WHERE status IN ('REQUIRED','PRESENTED')",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn provider_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> Result<Option<ProviderChallengeState>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT id, job_id, attempt_id, account_id, provider_id, challenge_type,
+                        status, endpoint_id, continuation_reference, created_at, expires_at
+                 FROM provider_challenges WHERE id=?1",
+                [challenge_id],
+                |row| {
+                    Ok(ProviderChallengeState {
+                        id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        attempt_id: row.get(2)?,
+                        account_id: row.get(3)?,
+                        provider_id: row.get(4)?,
+                        challenge_type: row.get(5)?,
+                        status: row.get(6)?,
+                        endpoint_id: row.get(7)?,
+                        continuation_reference: row.get(8)?,
+                        created_at: row.get(9)?,
+                        expires_at: row.get(10)?,
+                    })
+                },
+            )
+            .optional()
             .map_err(LocalIndexError::from)
     }
 

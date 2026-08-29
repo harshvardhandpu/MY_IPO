@@ -4,6 +4,7 @@
 - Gate 2 — Live registrar behavior + capability validation: **APPROVED AND LOCKED**
 - Gate 3 — Provider implementation design: **APPROVED AND LOCKED**
 - Gate 4 — Slice plan: **APPROVED — IMPLEMENTATION ORDER LOCKED**
+- Gate 4A — Shared provider runtime: **APPROVED AND LOCKED**
 
 ## Gate 1 lock record
 
@@ -48,7 +49,7 @@
 
 ## Slices
 
-- [ ] Gate 4A — shared capability/session/runtime changes
+- [x] Gate 4A — shared capability/session/runtime changes
 - [ ] Gate 4B — KFintech live-adapter replacement
 - [ ] Gate 4C — Bigshare human-verification adapter
 - [ ] Gate 4D — MUFG session/token adapter
@@ -58,13 +59,25 @@
 ## Verified starting point
 
 - Branch: `feature/multi-registrar`
-- Base HEAD: `b9f8c0f`
+- Gate 4A base HEAD: `d2bf075`
 - Phase 3B: independently approved and clean
-- SQLite projection schema: v4
+- SQLite projection schema: v5
 - Linux Secret Service synthetic-key smoke: PASS
 - Windows credential store: implemented/compiled; runtime smoke pending
 - Frontend canonical environment: host Node 26
-- Repository secret scan: PASS (120 files)
+- Repository secret scan: PASS (129 files)
+
+## Gate 4A implementation record
+
+- Typed capabilities and provider registry: **IMPLEMENTED**
+- Provider-specific retry/rate policy: **IMPLEMENTED**
+- Five-fact negative proof: **ENFORCED BY CONSTRUCTOR**
+- Human-verification durable metadata: **SAFE VALIDATED REFERENCES ONLY**
+- Restart recovery: **STALE CONTINUATIONS EXPIRE; JOBS PRESERVED**
+- Fixture provenance contract: **IMPLEMENTED**
+- Live lookup authorization: **FAIL-CLOSED BLOCKED**
+- Independent review: **PASS — GEMINI 3.6 FLASH**
+- Evidence: `docs/reviews/GATE_4A_INDEPENDENT_REVIEW.md`
 
 ## Notes for a fresh session
 

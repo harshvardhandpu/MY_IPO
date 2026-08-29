@@ -149,6 +149,20 @@ pub enum EventPayload {
         last_attempt_at: String,
         next_retry_at: Option<String>,
     },
+    /// Safe durable metadata for resumable human verification. Never session secrets or PAN.
+    AllotmentProviderChallengeUpdated {
+        challenge_id: String,
+        job_id: String,
+        attempt_id: String,
+        account_id: String,
+        provider_id: String,
+        challenge_type: String,
+        status: String,
+        endpoint_id: String,
+        continuation_reference: Option<String>,
+        created_at: String,
+        expires_at: Option<String>,
+    },
     /// Public registrar issue mapping discovered or revalidated (never PAN).
     AllotmentProviderDiscovered {
         application_id: String,
@@ -192,6 +206,9 @@ impl EventPayload {
             Self::AllotmentJobStatusChanged { .. } => "ALLOTMENT_JOB_STATUS_CHANGED",
             Self::AllotmentAttemptRecorded { .. } => "ALLOTMENT_ATTEMPT_RECORDED",
             Self::AllotmentAttemptStateUpdated { .. } => "ALLOTMENT_ATTEMPT_STATE_UPDATED",
+            Self::AllotmentProviderChallengeUpdated { .. } => {
+                "ALLOTMENT_PROVIDER_CHALLENGE_UPDATED"
+            }
             Self::AllotmentProviderDiscovered { .. } => "ALLOTMENT_PROVIDER_DISCOVERED",
             Self::EstimatedProfitUpdated { .. } => "ESTIMATED_PROFIT_UPDATED",
         }

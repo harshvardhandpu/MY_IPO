@@ -6,6 +6,230 @@ use sanket_identity_security::Pan;
 
 use crate::status::NormalizedAllotmentStatus;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LookupKeyKind {
+    Pan,
+    ApplicationNumber,
+    ApplicationNumberAndPan,
+    DematAccount,
+    BankAccountAndIfsc,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum IssueDiscoveryMode {
+    None,
+    PublicHttp,
+    PublicJavascript,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SessionRequirement {
+    None,
+    ChallengeToken,
+    Cookie,
+    CookieAndRequestToken,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HumanVerificationRequirement {
+    None,
+    Conditional,
+    Required,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProviderTransportKind {
+    Http,
+    Browser,
+    Hybrid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BackgroundExecution {
+    Unattended,
+    PrepareOnly,
+    ForegroundOnly,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCapabilities {
+    pub issue_discovery: IssueDiscoveryMode,
+    pub lookup_keys: Vec<LookupKeyKind>,
+    pub session: SessionRequirement,
+    pub human_verification: HumanVerificationRequirement,
+    pub transport: ProviderTransportKind,
+    pub background: BackgroundExecution,
+}
+
+impl ProviderCapabilities {
+    pub fn supports(&self, key: LookupKeyKind) -> bool {
+        self.lookup_keys.contains(&key)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProviderContinuationReference(String);
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("invalid safe provider metadata")]
+pub struct SafeProviderMetadataError;
+
+fn is_safe_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+}
+
+impl ProviderContinuationReference {
+    pub fn new(value: impl Into<String>) -> Result<Self, SafeProviderMetadataError> {
+        let value = value.into();
+        is_safe_identifier(&value)
+            .then_some(Self(value))
+            .ok_or(SafeProviderMetadataError)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HumanVerificationType {
+    Captcha,
+    Otp,
+    InteractiveBrowser,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HumanVerificationStatus {
+    Required,
+    Presented,
+    Completed,
+    Expired,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanVerificationChallenge {
+    challenge_id: String,
+    provider_id: String,
+    job_id: String,
+    attempt_id: String,
+    account_id: String,
+    challenge_type: HumanVerificationType,
+    status: HumanVerificationStatus,
+    endpoint_id: String,
+    created_at: String,
+    expires_at: Option<String>,
+    continuation_reference: ProviderContinuationReference,
+}
+
+impl HumanVerificationChallenge {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        challenge_id: impl Into<String>,
+        provider_id: impl Into<String>,
+        job_id: impl Into<String>,
+        attempt_id: impl Into<String>,
+        account_id: impl Into<String>,
+        challenge_type: HumanVerificationType,
+        status: HumanVerificationStatus,
+        endpoint_id: impl Into<String>,
+        created_at: impl Into<String>,
+        expires_at: Option<String>,
+        continuation_reference: ProviderContinuationReference,
+    ) -> Result<Self, SafeProviderMetadataError> {
+        let challenge = Self {
+            challenge_id: challenge_id.into(),
+            provider_id: provider_id.into(),
+            job_id: job_id.into(),
+            attempt_id: attempt_id.into(),
+            account_id: account_id.into(),
+            challenge_type,
+            status,
+            endpoint_id: endpoint_id.into(),
+            created_at: created_at.into(),
+            expires_at,
+            continuation_reference,
+        };
+        [
+            challenge.challenge_id.as_str(),
+            challenge.provider_id.as_str(),
+            challenge.job_id.as_str(),
+            challenge.attempt_id.as_str(),
+            challenge.account_id.as_str(),
+            challenge.endpoint_id.as_str(),
+        ]
+        .iter()
+        .all(|value| is_safe_identifier(value))
+        .then_some(challenge)
+        .ok_or(SafeProviderMetadataError)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SanitizedFixtureProvenance {
+    provider: String,
+    source_url: String,
+    retrieved_at: String,
+    fixture_type: String,
+    sanitized: bool,
+    content_sha256: String,
+    structural_fingerprint: Option<String>,
+}
+
+impl SanitizedFixtureProvenance {
+    pub fn new(
+        provider: impl Into<String>,
+        source_url: impl Into<String>,
+        retrieved_at: impl Into<String>,
+        fixture_type: impl Into<String>,
+        content_sha256: impl Into<String>,
+        structural_fingerprint: Option<String>,
+    ) -> Result<Self, SafeProviderMetadataError> {
+        let provenance = Self {
+            provider: provider.into(),
+            source_url: source_url.into(),
+            retrieved_at: retrieved_at.into(),
+            fixture_type: fixture_type.into(),
+            sanitized: true,
+            content_sha256: content_sha256.into(),
+            structural_fingerprint,
+        };
+        let valid = is_safe_identifier(&provenance.provider)
+            && provenance.source_url.starts_with("https://")
+            && provenance.source_url.len() <= 2_048
+            && !provenance
+                .source_url
+                .bytes()
+                .any(|b| b.is_ascii_whitespace())
+            && !provenance.retrieved_at.is_empty()
+            && provenance.retrieved_at.len() <= 64
+            && is_safe_identifier(&provenance.fixture_type)
+            && provenance.content_sha256.len() == 64
+            && provenance
+                .content_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit())
+            && provenance
+                .structural_fingerprint
+                .as_deref()
+                .is_none_or(is_safe_identifier);
+        valid.then_some(provenance).ok_or(SafeProviderMetadataError)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistrarIssue {
     pub registrar_id: String,
@@ -23,16 +247,122 @@ pub struct AllotmentLookupContext {
     pub issue: RegistrarIssue,
 }
 
-/// Safe provider outcome — never contains PAN.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProviderResultProvenance {
+    ConfirmedProviderResponse,
+    Fixture,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NegativeResultProof(());
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("negative result proof is incomplete")]
+pub struct NegativeResultProofError;
+
+impl NegativeResultProof {
+    pub fn new(
+        provider_confirmed: bool,
+        issue_confirmed: bool,
+        structure_confirmed: bool,
+        negative_marker_confirmed: bool,
+        unambiguous: bool,
+    ) -> Result<Self, NegativeResultProofError> {
+        if provider_confirmed
+            && issue_confirmed
+            && structure_confirmed
+            && negative_marker_confirmed
+            && unambiguous
+        {
+            Ok(Self(()))
+        } else {
+            Err(NegativeResultProofError)
+        }
+    }
+}
+
+/// Safe provider outcome — never contains PAN. Final negative construction is guarded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderAllotmentResult {
-    pub status: NormalizedAllotmentStatus,
-    pub allotted_lots: Option<u32>,
-    pub allotted_shares: Option<u64>,
-    pub provider_reference: Option<String>,
-    pub checked_at: String,
-    pub safe_message: Option<String>,
-    pub evidence_ref: Option<String>,
+    status: NormalizedAllotmentStatus,
+    allotted_lots: Option<u32>,
+    allotted_shares: Option<u64>,
+    provider_reference: Option<String>,
+    checked_at: String,
+    safe_message: Option<String>,
+    contract_fingerprint: Option<String>,
+    provenance: ProviderResultProvenance,
+}
+
+impl ProviderAllotmentResult {
+    pub fn confirmed_not_allotted(
+        _proof: NegativeResultProof,
+        checked_at: impl Into<String>,
+        contract_fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: NormalizedAllotmentStatus::NotAllotted,
+            allotted_lots: None,
+            allotted_shares: None,
+            provider_reference: None,
+            checked_at: checked_at.into(),
+            safe_message: None,
+            contract_fingerprint: Some(contract_fingerprint.into()),
+            provenance: ProviderResultProvenance::ConfirmedProviderResponse,
+        }
+    }
+
+    fn fixture(
+        status: NormalizedAllotmentStatus,
+        allotted_lots: Option<u32>,
+        allotted_shares: Option<u64>,
+        provider_reference: Option<String>,
+        safe_message: Option<String>,
+    ) -> Self {
+        Self {
+            status,
+            allotted_lots,
+            allotted_shares,
+            provider_reference,
+            checked_at: "fixture".into(),
+            safe_message,
+            contract_fingerprint: Some("fixture:v1".into()),
+            provenance: ProviderResultProvenance::Fixture,
+        }
+    }
+
+    pub fn status(&self) -> NormalizedAllotmentStatus {
+        self.status
+    }
+
+    pub fn allotted_lots(&self) -> Option<u32> {
+        self.allotted_lots
+    }
+
+    pub fn allotted_shares(&self) -> Option<u64> {
+        self.allotted_shares
+    }
+
+    pub fn provider_reference(&self) -> Option<&str> {
+        self.provider_reference.as_deref()
+    }
+
+    pub fn checked_at(&self) -> &str {
+        &self.checked_at
+    }
+
+    pub fn safe_message(&self) -> Option<&str> {
+        self.safe_message.as_deref()
+    }
+
+    pub fn contract_fingerprint(&self) -> Option<&str> {
+        self.contract_fingerprint.as_deref()
+    }
+
+    pub fn provenance(&self) -> ProviderResultProvenance {
+        self.provenance
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +404,7 @@ pub enum ProviderHealth {
 /// Domain/application layers talk only to this trait.
 pub trait AllotmentProvider: Send + Sync {
     fn provider_id(&self) -> &'static str;
+    fn capabilities(&self) -> ProviderCapabilities;
     fn health(&self) -> ProviderHealth;
     fn supports(&self, issue: &RegistrarIssue) -> bool;
 
@@ -94,6 +425,17 @@ pub struct FixtureKfintechProvider;
 impl AllotmentProvider for FixtureKfintechProvider {
     fn provider_id(&self) -> &'static str {
         "kfintech-fixture"
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            issue_discovery: IssueDiscoveryMode::None,
+            lookup_keys: vec![LookupKeyKind::Pan],
+            session: SessionRequirement::None,
+            human_verification: HumanVerificationRequirement::None,
+            transport: ProviderTransportKind::Http,
+            background: BackgroundExecution::Unattended,
+        }
     }
 
     fn health(&self) -> ProviderHealth {
@@ -130,17 +472,15 @@ impl AllotmentProvider for FixtureKfintechProvider {
             _ => (NormalizedAllotmentStatus::NotFound, None, None),
         };
 
-        Ok(ProviderAllotmentResult {
+        Ok(ProviderAllotmentResult::fixture(
             status,
-            allotted_lots: lots,
-            allotted_shares: shares,
-            provider_reference: Some(format!(
+            lots,
+            shares,
+            Some(format!(
                 "fixture:{}:{}",
                 context.account_id, context.attempt_id
             )),
-            checked_at: "fixture".into(),
-            safe_message: Some(status.as_str().into()),
-            evidence_ref: None,
-        })
+            Some(status.as_str().into()),
+        ))
     }
 }

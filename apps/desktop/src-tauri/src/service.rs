@@ -174,7 +174,14 @@ impl Application {
         match (self.security_mode, provider_id) {
             (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-fixture") => Ok(()),
             (RuntimeSecurityMode::ProductionSecure, "kfintech-live") => {
-                self.identity_key().map(|_| ())
+                self.identity_key().map(|_| ())?;
+                if sanket_allotment::real_investor_lookup_allowed() {
+                    Ok(())
+                } else {
+                    Err(ServiceError::Invalid(
+                        "real investor lookup remains blocked pending the controlled pilot".into(),
+                    ))
+                }
             }
             (RuntimeSecurityMode::DevelopmentSynthetic, "kfintech-live") => {
                 Err(ServiceError::Invalid(
@@ -688,6 +695,12 @@ impl Application {
         Ok(self.index.resumable_allotment_job_ids(epoch_secs())?)
     }
 
+    pub fn reconcile_provider_runtime_after_restart(&self) -> Result<()> {
+        Ok(self
+            .index
+            .reconcile_ephemeral_allotment_state_after_restart()?)
+    }
+
     pub fn cancel_allotment_job(&self, job_id: &str) -> Result<bool> {
         Ok(self.index.request_allotment_cancel(job_id)?)
     }
@@ -775,7 +788,9 @@ impl Application {
             sanket_identity_security::SensitiveIdentityService::new_boxed(key_provider);
         let mut report_rows = Vec::new();
         let mut rev = 3u64;
-        let policy = sanket_allotment::ProviderRatePolicy::default();
+        let provider_kind = sanket_allotment::ProviderRegistry::resolve(&provider_id)
+            .ok_or_else(|| ServiceError::Invalid("unsupported allotment provider".into()))?;
+        let policy = sanket_allotment::ProviderRatePolicy::for_provider(provider_kind);
         let mut cancelled = false;
 
         for account_id in &accounts {
@@ -879,10 +894,10 @@ impl Application {
                             )
                         } {
                             Ok(r) => Ok((
-                                r.status.as_str().to_owned(),
-                                r.allotted_lots,
-                                r.allotted_shares,
-                                r.provider_reference,
+                                r.status().as_str().to_owned(),
+                                r.allotted_lots(),
+                                r.allotted_shares(),
+                                r.provider_reference().map(str::to_owned),
                                 if use_live {
                                     "AUTOMATED".to_owned()
                                 } else {
@@ -1133,12 +1148,12 @@ impl Application {
             .as_ref()
             .map(|attempt| attempt.attempt_count.saturating_add(1))
             .unwrap_or(1);
-        let status = if req.explicit_not_allotted {
+        let reported_outcome = if req.explicit_not_allotted {
             "NOT_ALLOTTED"
         } else if req.allotted_shares.unwrap_or(0) > 0 || req.allotted_lots.unwrap_or(0) > 0 {
             "ALLOTTED"
         } else {
-            "MANUAL_RESULT"
+            "UNKNOWN"
         };
         let event = EventEnvelope::seal(NewEvent {
             event_id: String::new(),
@@ -1154,13 +1169,15 @@ impl Application {
                 attempt_id: attempt_id.clone(),
                 job_id: req.job_id.clone(),
                 account_id: req.account_id.clone(),
-                status: status.into(),
+                status: "MANUAL_RESULT".into(),
                 attempt_count,
                 allotted_lots: req.allotted_lots,
                 allotted_shares: req.allotted_shares,
                 source: "MANUAL".into(),
                 provider_reference: req.note.clone(),
-                safe_message: Some("Manually recorded by an authorized local actor".into()),
+                safe_message: Some(format!(
+                    "Manually recorded by an authorized local actor: {reported_outcome}"
+                )),
                 last_attempt_at: epoch_secs().to_string(),
                 next_retry_at: None,
             },
@@ -1209,7 +1226,7 @@ impl Application {
             display_name: label,
             account_kind: kind,
             masked_pan: masked,
-            status: status.into(),
+            status: "MANUAL_RESULT".into(),
             allotted_lots: req.allotted_lots,
             allotted_shares: req.allotted_shares,
             provider_id: "manual".into(),

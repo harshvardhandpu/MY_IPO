@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::ProviderId;
 use crate::status::NormalizedAllotmentStatus;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -27,6 +28,35 @@ impl Default for ProviderRatePolicy {
 }
 
 impl ProviderRatePolicy {
+    pub const fn for_provider(provider: ProviderId) -> Self {
+        match provider {
+            ProviderId::KfintechFixture => Self {
+                min_interval_ms: 0,
+                max_attempts: 1,
+                base_backoff_ms: 0,
+                max_backoff_ms: 0,
+            },
+            ProviderId::KfintechLive => Self {
+                min_interval_ms: 1_500,
+                max_attempts: 3,
+                base_backoff_ms: 2_000,
+                max_backoff_ms: 60_000,
+            },
+            ProviderId::BigshareLive => Self {
+                min_interval_ms: 1_500,
+                max_attempts: 1,
+                base_backoff_ms: 0,
+                max_backoff_ms: 0,
+            },
+            ProviderId::MufgIntimeLive => Self {
+                min_interval_ms: 1_500,
+                max_attempts: 2,
+                base_backoff_ms: 2_000,
+                max_backoff_ms: 60_000,
+            },
+        }
+    }
+
     pub fn next_backoff_ms(&self, attempt_count: u32) -> u64 {
         let exp = attempt_count.saturating_sub(1).min(8);
         let raw = self.base_backoff_ms.saturating_mul(1u64 << exp);

@@ -19,7 +19,9 @@ pub enum AllotmentJobError {
 pub enum AllotmentJobStatus {
     Created,
     WaitingForProviderAvailability,
+    PreparingProviderSession,
     Running,
+    VerificationRequiredRefresh,
     PartiallyComplete,
     Complete,
 }
@@ -29,7 +31,9 @@ impl AllotmentJobStatus {
         match self {
             Self::Created => "CREATED",
             Self::WaitingForProviderAvailability => "WAITING_FOR_PROVIDER_AVAILABILITY",
+            Self::PreparingProviderSession => "PREPARING_PROVIDER_SESSION",
             Self::Running => "RUNNING",
+            Self::VerificationRequiredRefresh => "VERIFICATION_REQUIRED_REFRESH",
             Self::PartiallyComplete => "PARTIALLY_COMPLETE",
             Self::Complete => "COMPLETE",
         }
@@ -40,10 +44,16 @@ impl AllotmentJobStatus {
         matches!(
             (self, next),
             (Created, WaitingForProviderAvailability)
+                | (Created, PreparingProviderSession)
                 | (Created, Running)
+                | (WaitingForProviderAvailability, PreparingProviderSession)
                 | (WaitingForProviderAvailability, Running)
                 | (WaitingForProviderAvailability, Complete)
+                | (PreparingProviderSession, Running)
+                | (PreparingProviderSession, VerificationRequiredRefresh)
+                | (VerificationRequiredRefresh, PreparingProviderSession)
                 | (Running, PartiallyComplete)
+                | (Running, VerificationRequiredRefresh)
                 | (Running, Complete)
                 | (PartiallyComplete, Running)
                 | (PartiallyComplete, Complete)
@@ -55,12 +65,14 @@ impl AllotmentJobStatus {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AttemptStatus {
     Pending,
+    PreparingProviderSession,
     Running,
     Allotted,
     NotAllotted,
     NotFound,
     Unknown,
     NeedsHumanVerification,
+    VerificationRequiredRefresh,
     RateLimited,
     ProviderUnavailable,
     RetryableError,
@@ -71,12 +83,14 @@ impl AttemptStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "PENDING",
+            Self::PreparingProviderSession => "PREPARING_PROVIDER_SESSION",
             Self::Running => "RUNNING",
             Self::Allotted => "ALLOTTED",
             Self::NotAllotted => "NOT_ALLOTTED",
             Self::NotFound => "NOT_FOUND",
             Self::Unknown => "UNKNOWN",
             Self::NeedsHumanVerification => "NEEDS_HUMAN_VERIFICATION",
+            Self::VerificationRequiredRefresh => "VERIFICATION_REQUIRED_REFRESH",
             Self::RateLimited => "RATE_LIMITED",
             Self::ProviderUnavailable => "PROVIDER_UNAVAILABLE",
             Self::RetryableError => "RETRYABLE_ERROR",
@@ -113,6 +127,14 @@ pub enum AllotmentResultSource {
     Provider,
     Manual,
     Fixture,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ManualReportedOutcome {
+    Allotted,
+    NotAllotted,
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +248,7 @@ pub struct AllotmentCheckAttempt {
     provider_reference: Option<String>,
     safe_message: Option<String>,
     source: AllotmentResultSource,
+    manual_reported_outcome: Option<ManualReportedOutcome>,
     last_attempt_at: Option<String>,
     next_retry_at: Option<String>,
 }
@@ -253,6 +276,7 @@ impl AllotmentCheckAttempt {
             provider_reference: None,
             safe_message: None,
             source: AllotmentResultSource::Provider,
+            manual_reported_outcome: None,
             last_attempt_at: None,
             next_retry_at: None,
         })
@@ -288,6 +312,9 @@ impl AllotmentCheckAttempt {
     pub fn source(&self) -> AllotmentResultSource {
         self.source
     }
+    pub fn manual_reported_outcome(&self) -> Option<ManualReportedOutcome> {
+        self.manual_reported_outcome
+    }
 
     pub fn mark_running(&mut self, at: impl Into<String>) {
         self.status = AttemptStatus::Running;
@@ -312,6 +339,7 @@ impl AllotmentCheckAttempt {
         self.provider_reference = provider_reference;
         self.safe_message = safe_message;
         self.source = source;
+        self.manual_reported_outcome = None;
         self.next_retry_at = if status.is_final() {
             None
         } else {
@@ -329,14 +357,15 @@ impl AllotmentCheckAttempt {
             AllotmentResultSource::Manual,
             None,
         );
-        // Manual confirmation still surfaces as MANUAL_RESULT; lots may imply allotted.
-        if input.allotted_shares.unwrap_or(0) > 0 || input.allotted_lots.unwrap_or(0) > 0 {
-            self.status = AttemptStatus::Allotted;
-            self.source = AllotmentResultSource::Manual;
-        } else if input.explicit_not_allotted {
-            self.status = AttemptStatus::NotAllotted;
-            self.source = AllotmentResultSource::Manual;
-        }
+        self.manual_reported_outcome = Some(
+            if input.allotted_shares.unwrap_or(0) > 0 || input.allotted_lots.unwrap_or(0) > 0 {
+                ManualReportedOutcome::Allotted
+            } else if input.explicit_not_allotted {
+                ManualReportedOutcome::NotAllotted
+            } else {
+                ManualReportedOutcome::Unknown
+            },
+        );
     }
 }
 
