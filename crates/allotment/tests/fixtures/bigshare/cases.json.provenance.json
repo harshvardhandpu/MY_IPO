@@ -1,0 +1,9 @@
+{
+  "provider": "bigshare-live",
+  "source_url": "https://ipo.bigshareonline.com/ipo_status.html",
+  "retrieved_at": "2026-08-28T17:48:00Z",
+  "fixture_type": "RESULT_CASES",
+  "sanitized": true,
+  "content_sha256": "24ead0456ea1160e3460be378d538c64539fdf9af8f01d9508d70be9fae1de03",
+  "structural_fingerprint": "bigshare-result-d-status-v1"
+}

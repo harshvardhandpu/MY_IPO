@@ -1,0 +1,101 @@
+{
+  "ok_allotted": {
+    "d": {
+      "Status": "OK",
+      "APPLICATION_NO": "[SYNTHETIC_APPLICATION]",
+      "DPID": "[SYNTHETIC_DEMAT]",
+      "Name": "[SYNTHETIC_NAME]",
+      "APPLIED": 70,
+      "ALOTED": 35,
+      "MatchCount": 1,
+      "Records": [["[SYNTHETIC_APPLICATION]", "[SYNTHETIC_DEMAT]", "[SYNTHETIC_NAME]", "70", "35"]]
+    }
+  },
+  "ok_not_allotted": {
+    "d": {
+      "Status": "OK",
+      "APPLICATION_NO": "[SYNTHETIC_APPLICATION]",
+      "DPID": "[SYNTHETIC_DEMAT]",
+      "Name": "[SYNTHETIC_NAME]",
+      "APPLIED": 70,
+      "ALOTED": 0,
+      "MatchCount": 1,
+      "Records": [["[SYNTHETIC_APPLICATION]", "[SYNTHETIC_DEMAT]", "[SYNTHETIC_NAME]", "70", "0"]]
+    }
+  },
+  "ok_pending": {
+    "d": {
+      "Status": "OK",
+      "APPLICATION_NO": "[SYNTHETIC_APPLICATION]",
+      "DPID": "[SYNTHETIC_DEMAT]",
+      "Name": "[SYNTHETIC_NAME]",
+      "APPLIED": 70,
+      "ALOTED": null,
+      "MatchCount": 1,
+      "Records": [["[SYNTHETIC_APPLICATION]", "[SYNTHETIC_DEMAT]", "[SYNTHETIC_NAME]", "70", ""]]
+    }
+  },
+  "ok_zero_text": {
+    "d": {
+      "Status": "OK",
+      "APPLICATION_NO": "[SYNTHETIC_APPLICATION]",
+      "DPID": "[SYNTHETIC_DEMAT]",
+      "Name": "[SYNTHETIC_NAME]",
+      "APPLIED": 70,
+      "ALOTED": "0",
+      "MatchCount": 1,
+      "Records": []
+    }
+  },
+  "ok_multi_match": {
+    "d": {
+      "Status": "OK",
+      "APPLICATION_NO": "[SYNTHETIC_APPLICATION]",
+      "DPID": "[SYNTHETIC_DEMAT]",
+      "Name": "[SYNTHETIC_NAME]",
+      "APPLIED": 70,
+      "ALOTED": 0,
+      "MatchCount": 2,
+      "Records": [
+        ["[SYNTHETIC_APPLICATION_1]", "[SYNTHETIC_DEMAT]", "[SYNTHETIC_NAME]", "70", "0"],
+        ["[SYNTHETIC_APPLICATION_2]", "[SYNTHETIC_DEMAT]", "[SYNTHETIC_NAME]", "70", "0"]
+      ]
+    }
+  },
+  "notfound": {
+    "d": {
+      "Status": "NOTFOUND",
+      "Message": "[SYNTHETIC_NO_RECORD]"
+    }
+  },
+  "captcha": {
+    "d": {
+      "Status": "CAPTCHA"
+    }
+  },
+  "ratelimit": {
+    "d": {
+      "Status": "RATELIMIT"
+    }
+  },
+  "warming": {
+    "d": {
+      "Status": "WARMING"
+    }
+  },
+  "unknown_status": {
+    "d": {
+      "Status": "[SYNTHETIC_STATUS]"
+    }
+  },
+  "missing_status": {
+    "d": {
+      "Message": "[SYNTHETIC_MESSAGE]"
+    }
+  },
+  "changed_wrapper": {
+    "data": {
+      "Status": "OK"
+    }
+  }
+}

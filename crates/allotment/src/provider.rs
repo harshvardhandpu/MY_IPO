@@ -176,6 +176,76 @@ impl HumanVerificationChallenge {
         .then_some(challenge)
         .ok_or(SafeProviderMetadataError)
     }
+
+    pub fn status(&self) -> HumanVerificationStatus {
+        self.status
+    }
+
+    pub fn challenge_type(&self) -> HumanVerificationType {
+        self.challenge_type
+    }
+
+    pub fn endpoint_id(&self) -> &str {
+        &self.endpoint_id
+    }
+
+    pub fn expires_at(&self) -> Option<&str> {
+        self.expires_at.as_deref()
+    }
+
+    pub fn continuation_reference(&self) -> &str {
+        self.continuation_reference.as_str()
+    }
+
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+
+    pub fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
+    /// Legal lifecycle transitions. Completed/Expired/Cancelled are terminal;
+    /// an active challenge may be cancelled or may expire; Required may be
+    /// presented; Presented may be completed. Nothing skips or regresses.
+    pub fn transition(
+        &self,
+        next: HumanVerificationStatus,
+    ) -> Result<Self, SafeProviderMetadataError> {
+        use HumanVerificationStatus::{Cancelled, Completed, Expired, Presented, Required};
+        let legal = matches!(
+            (self.status, next),
+            (Required, Presented)
+                | (Required, Cancelled)
+                | (Required, Expired)
+                | (Presented, Completed)
+                | (Presented, Cancelled)
+                | (Presented, Expired)
+        );
+        if !legal {
+            return Err(SafeProviderMetadataError);
+        }
+        let mut next_challenge = self.clone();
+        next_challenge.status = next;
+        Ok(next_challenge)
+    }
+
+    /// Whether the resumable window has closed at `now` (RFC 3339 UTC).
+    /// A challenge with no expiry never expires by time alone. Fails safe:
+    /// anything at or past the expiry is expired.
+    pub fn is_expired(&self, now: &str) -> bool {
+        // ponytail: RFC 3339 UTC "Z" timestamps compare correctly as
+        // strings under the provenance contract's fixed shape; a malformed
+        // value fails safe (treated as expired).
+        match self.expires_at.as_deref() {
+            Some(expires_at) => now >= expires_at,
+            None => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +482,55 @@ impl ProviderAllotmentResult {
             contract_fingerprint: Some(contract_fingerprint.into()),
             provenance: ProviderResultProvenance::ConfirmedProviderResponse,
         }
+    }
+
+    /// A recognized provider no-record state (e.g. Bigshare `NOTFOUND`) is a
+    /// typed operational outcome — never `NOT_ALLOTTED`, which stays reserved
+    /// for a guarded negative proof.
+    pub fn not_found(
+        checked_at: impl Into<String>,
+        contract_fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: NormalizedAllotmentStatus::NotFound,
+            allotted_lots: None,
+            allotted_shares: None,
+            provider_reference: None,
+            checked_at: checked_at.into(),
+            safe_message: None,
+            contract_fingerprint: Some(contract_fingerprint.into()),
+            provenance: ProviderResultProvenance::ConfirmedProviderResponse,
+        }
+    }
+
+    /// A recognized provider operational state (challenge required again,
+    /// rate limited, endpoint warming) carried inside a structurally valid
+    /// response. Guarded: it can never construct a financial status —
+    /// `Allotted`/`NotAllotted` remain reachable only through their proof
+    /// constructors.
+    pub fn operational(
+        status: NormalizedAllotmentStatus,
+        checked_at: impl Into<String>,
+        contract_fingerprint: impl Into<String>,
+    ) -> Option<Self> {
+        if !matches!(
+            status,
+            NormalizedAllotmentStatus::NeedsHumanVerification
+                | NormalizedAllotmentStatus::RateLimited
+                | NormalizedAllotmentStatus::RetryableError
+        ) {
+            return None;
+        }
+        Some(Self {
+            status,
+            allotted_lots: None,
+            allotted_shares: None,
+            provider_reference: None,
+            checked_at: checked_at.into(),
+            safe_message: None,
+            contract_fingerprint: Some(contract_fingerprint.into()),
+            provenance: ProviderResultProvenance::ConfirmedProviderResponse,
+        })
     }
 
     fn fixture(

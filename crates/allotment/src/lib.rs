@@ -4,6 +4,7 @@
 //! temporary argument inside a purpose-scoped `with_pan` closure owned by the
 //! application service — never via LLM/agent context.
 
+mod bigshare;
 mod job;
 mod kfintech;
 mod kfintech_live;
@@ -13,6 +14,7 @@ mod registry;
 mod runtime;
 mod status;
 
+pub use bigshare::{BigshareIssue, BigshareProvider};
 pub use job::{
     AllotmentCheckAttempt, AllotmentCheckJob, AllotmentJobError, AllotmentJobStatus,
     AllotmentResultSource, AttemptStatus, ManualReportedOutcome, ManualResultInput,
