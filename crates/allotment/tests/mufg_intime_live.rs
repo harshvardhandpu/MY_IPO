@@ -109,6 +109,14 @@ fn rejects_placeholder_invalid_or_duplicate_issue_ids() {
 }
 
 #[test]
+fn rejects_trailing_issue_without_company_name() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/mufg/issues.json")).unwrap();
+    let incomplete = serde_json::to_string(&cases["discovery_trailing_incomplete"]).unwrap();
+    assert!(MufgIntimeProvider::parse_issue_bundle(&incomplete, "2026-08-28T18:09:00Z").is_err());
+}
+
+#[test]
 fn provider_contract_capabilities_match_design() {
     let provider = mufg_provider();
     let capabilities = provider.capabilities();
@@ -222,6 +230,38 @@ fn captcha_detection_absent_dormant_required() {
     assert_eq!(ambiguous.expect("state"), MufgCaptchaState::Unknown);
 }
 
+#[test]
+fn visible_captcha_ignores_unrelated_hidden_elements() {
+    use sanket_allotment::MufgCaptchaState;
+    let page = concat!(
+        "<div id=\"unrelated\" style=\"display:none\">other</div>",
+        "<div id=\"captcha\"><img id=\"CImage\"></div>"
+    );
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(page).expect("state"),
+        MufgCaptchaState::Required
+    );
+}
+
+#[test]
+fn uppercase_captcha_text_without_structure_is_unknown() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state("<div>CAPTCHA validation</div>").expect("state"),
+        MufgCaptchaState::Unknown
+    );
+}
+
+#[test]
+fn malformed_captcha_container_is_unknown() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state("<div id=\"captcha\"><img id=\"CImage\">")
+            .expect("state"),
+        MufgCaptchaState::Unknown
+    );
+}
+
 // ---------------------------------------------------------------
 // Request construction (synthetic only)
 // ---------------------------------------------------------------
@@ -298,6 +338,12 @@ fn empty_allot_is_pending() {
 #[test]
 fn message_row_no_record_is_not_found() {
     let result = parse_result(&parse_case("not_found")).expect("structured result");
+    assert_eq!(result.status(), NormalizedAllotmentStatus::NotFound);
+}
+
+#[test]
+fn specific_no_record_semantics_precede_generic_retry_text() {
+    let result = parse_result(&parse_case("not_found_try_again")).expect("structured result");
     assert_eq!(result.status(), NormalizedAllotmentStatus::NotFound);
 }
 
@@ -445,6 +491,23 @@ fn token_extraction_requires_exactly_one_nonempty_hidtoken() {
     // Two tokens in one response is drift, not pick-first-wins.
     assert!(
         MufgIntimeProvider::parse_token_response(cases["token_duplicate"]["d"].as_str().unwrap())
+            .is_err()
+    );
+}
+
+#[test]
+fn token_extraction_is_scoped_to_hidtoken_input() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/mufg/session.json")).unwrap();
+    assert_eq!(
+        MufgIntimeProvider::parse_token_response(
+            cases["token_unrelated_before"]["d"].as_str().unwrap()
+        )
+        .expect("valid hidToken after unrelated input"),
+        "[SYNTHETIC_TOKEN]"
+    );
+    assert!(
+        MufgIntimeProvider::parse_token_response(cases["token_malformed"]["d"].as_str().unwrap())
             .is_err()
     );
 }

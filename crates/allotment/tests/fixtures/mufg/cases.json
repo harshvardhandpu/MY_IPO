@@ -11,6 +11,9 @@
   "not_found": {
     "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>No record found</Message></Table1></DS></DocumentElement>"
   },
+  "not_found_try_again": {
+    "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>No record found; try again later</Message></Table1></DS></DocumentElement>"
+  },
   "unknown": {
     "d": "<DocumentElement><DS><Table1 diffgr:id=\"Table1\"><Message>[SYNTHETIC_UNKNOWN]</Message></Table1></DS></DocumentMessage>"
   },

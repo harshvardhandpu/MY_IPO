@@ -8,6 +8,9 @@
   "discovery_duplicate": {
     "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><company_id>11926</company_id><companyname>SYNTHETIC ALPHA LIMITED</companyname></Table><Table diffgr:id=\"Table2\"><company_id>11926</company_id><companyname>SYNTHETIC ALPHA LIMITED</companyname></Table></DS></DocumentElement>"
   },
+  "discovery_trailing_incomplete": {
+    "d": "<DocumentElement><DS><Table diffgr:id=\"Table1\"><company_id>11926</company_id><companyname>SYNTHETIC ALPHA LIMITED</companyname></Table><Table diffgr:id=\"Table2\"><company_id>11925</company_id></Table></DS></DocumentElement>"
+  },
   "discovery_drifted": {
     "records": []
   }

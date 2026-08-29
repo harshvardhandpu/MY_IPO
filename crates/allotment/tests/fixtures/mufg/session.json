@@ -2,6 +2,12 @@
   "token_ok": {
     "d": "<html><body><input type=\"hidden\" id=\"hidToken\" name=\"hidToken\" value=\"[SYNTHETIC_TOKEN]\" /></body></html>"
   },
+  "token_unrelated_before": {
+    "d": "<html><body><input id=\"otherField\" value=\"unrelated\" /><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN]\" /></body></html>"
+  },
+  "token_malformed": {
+    "d": "<html><body><span>hidToken</span><input id=\"otherField\" value=\"unrelated\" /></body></html>"
+  },
   "token_missing": {
     "d": "<html><body><input type=\"hidden\" id=\"otherField\" value=\"x\" /></body></html>"
   },

@@ -130,7 +130,9 @@ impl MufgIntimeProvider {
         let mut rest = xml_payload(bundle)?;
         while let Some((provider_issue_id, after_id)) = tagged_value(&rest, "company_id") {
             let Some((display_name, after_name)) = tagged_value(after_id, "companyname") else {
-                break;
+                return Err(ProviderError::Unknown(
+                    "mufg issue record is incomplete".into(),
+                ));
             };
             rest = after_name.to_owned();
 
@@ -167,29 +169,41 @@ impl MufgIntimeProvider {
     /// response. Exactly one non-empty `hidToken` value is accepted;
     /// missing, empty, or duplicated tokens are structural drift.
     pub fn parse_token_response(body: &str) -> Result<String, ProviderError> {
+        let normalized = body.to_ascii_lowercase();
         let mut token = None;
-        let mut rest = body;
-        while let Some(at) = rest.find("hidToken") {
-            rest = &rest[at..];
-            // Scan to the closing quote of the value attribute.
-            let value_open = rest
-                .find("value=\"")
-                .ok_or_else(|| ProviderError::Unknown("mufg token field changed".into()))?;
-            let value = &rest[value_open + "value=\"".len()..];
-            let value_close = value
-                .find('"')
-                .ok_or_else(|| ProviderError::Unknown("mufg token field changed".into()))?;
-            let extracted = &value[..value_close];
-            if token.is_some() {
-                return Err(ProviderError::Unknown(
-                    "mufg token response contains multiple tokens".into(),
-                ));
+        let mut offset = 0;
+        while let Some(relative_start) = normalized[offset..].find("<input") {
+            let start = offset + relative_start;
+            let after_name = normalized.as_bytes().get(start + "<input".len()).copied();
+            if !after_name
+                .is_some_and(|byte| byte.is_ascii_whitespace() || byte == b'>' || byte == b'/')
+            {
+                offset = start + "<input".len();
+                continue;
             }
-            if extracted.is_empty() {
-                return Err(ProviderError::Unknown("mufg token is empty".into()));
+            let end = start
+                + normalized[start..]
+                    .find('>')
+                    .ok_or_else(|| ProviderError::Unknown("mufg token field changed".into()))?;
+            let element = &body[start..=end];
+            let id = html_attribute(element, "id")?;
+            let name = html_attribute(element, "name")?;
+            if id.is_some_and(|value| value.eq_ignore_ascii_case("hidToken"))
+                || name.is_some_and(|value| value.eq_ignore_ascii_case("hidToken"))
+            {
+                let extracted = html_attribute(element, "value")?
+                    .ok_or_else(|| ProviderError::Unknown("mufg token field changed".into()))?;
+                if token.is_some() {
+                    return Err(ProviderError::Unknown(
+                        "mufg token response contains multiple tokens".into(),
+                    ));
+                }
+                if extracted.is_empty() {
+                    return Err(ProviderError::Unknown("mufg token is empty".into()));
+                }
+                token = Some(extracted.to_owned());
             }
-            token = Some(extracted.to_owned());
-            rest = &value[value_close..];
+            offset = end + 1;
         }
         token.ok_or_else(|| ProviderError::Unknown("mufg token missing".into()))
     }
@@ -231,9 +245,9 @@ impl MufgIntimeProvider {
     }
 }
 
-/// Narrow lookup-request DTO. No member identity fields are persisted; the
-/// token header value is redacted in Debug and never logged.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Narrow lookup-request DTO. It deliberately does not implement serde:
+/// outbound encoding belongs at the transport boundary, not persisted state.
+#[derive(Clone, PartialEq, Eq)]
 pub struct MufgLookupRequest {
     pub endpoint: String,
     pub method: String,
@@ -259,26 +273,37 @@ impl MufgIntimeProvider {
     /// is `Required`; no CAPTCHA references at all is `Absent`; markup
     /// present but visibility undecidable is `Unknown` (fail safe).
     pub fn captcha_state(page: &str) -> Result<MufgCaptchaState, ProviderError> {
-        let has_captcha_container = page.contains("CImage") || page.contains("txtCaptch");
-        if !has_captcha_container {
+        let normalized = page.to_ascii_lowercase();
+        let markers: Vec<_> = normalized
+            .match_indices("cimage")
+            .chain(normalized.match_indices("txtcaptch"))
+            .map(|(at, _)| at)
+            .collect();
+        if markers.is_empty() {
             // A textual reference without the recognized container is
             // ambiguous: fail safe rather than silently Absent.
-            let mentions_captcha = page.contains("captch");
-            return Ok(if mentions_captcha {
+            return Ok(if normalized.contains("captch") {
                 MufgCaptchaState::Unknown
             } else {
                 MufgCaptchaState::Absent
             });
         }
-        let has_hidden = page.contains("display:none") || page.contains("display: none");
-        if has_hidden {
-            Ok(MufgCaptchaState::Dormant)
-        } else {
-            Ok(MufgCaptchaState::Required)
+
+        let mut visible = false;
+        for marker in markers {
+            match captcha_marker_hidden(&normalized, marker) {
+                Some(false) => visible = true,
+                Some(true) => {}
+                None => return Ok(MufgCaptchaState::Unknown),
+            }
         }
-        // ponytail: visibility classification covers the observed markup
-        // shapes; richer detection (class-based hiding) upgrades if MUFG
-        // changes its markup.
+        Ok(if visible {
+            MufgCaptchaState::Required
+        } else {
+            MufgCaptchaState::Dormant
+        })
+        // ponytail: visibility classification covers the observed MUFG div
+        // container; upgrade to an HTML parser only if that contract changes.
     }
 
     /// Normalize a JSON-wrapped XML result body. Reads only `ALLOT`/`SHARES`
@@ -309,16 +334,17 @@ impl MufgIntimeProvider {
                 m if m.contains("CAPTCHA") => {
                     ProviderError::NeedsHuman("mufg captcha activation".into())
                 }
-                m if m.contains("RATE") || m.contains("TRY LATER") => ProviderError::RateLimited,
-                m if m.contains("UNAVAILABLE") || m.contains("TRY AGAIN") => {
-                    ProviderError::Unavailable("mufg service reported unavailable".into())
-                }
                 m if m.contains("NO RECORD") => {
-                    // Structurally recognized no-record phrase.
+                    // Structurally recognized provider no-record phrase takes
+                    // precedence over generic retry wording in the same row.
                     return Ok(ProviderAllotmentResult::not_found(
                         checked_at,
                         contract_fingerprint,
                     ));
+                }
+                m if m.contains("RATE") || m.contains("TRY LATER") => ProviderError::RateLimited,
+                m if m.contains("UNAVAILABLE") || m.contains("TRY AGAIN") => {
+                    ProviderError::Unavailable("mufg service reported unavailable".into())
                 }
                 _ => ProviderError::Unknown("mufg message row is not recognized".into()),
             });
@@ -439,6 +465,88 @@ fn xml_payload(body: &str) -> Result<String, ProviderError> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| ProviderError::Unknown("mufg result wrapper changed".into()))?;
     Ok(payload.to_owned())
+}
+
+/// Read one quoted HTML attribute from a single opening tag. Attribute names
+/// are ASCII-case-insensitive; malformed quoting fails closed.
+fn html_attribute<'a>(tag: &'a str, name: &str) -> Result<Option<&'a str>, ProviderError> {
+    let normalized = tag.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(relative_start) = normalized[offset..].find(name) {
+        let start = offset + relative_start;
+        let boundary = start == 0
+            || normalized.as_bytes()[start - 1].is_ascii_whitespace()
+            || normalized.as_bytes()[start - 1] == b'<';
+        if !boundary {
+            offset = start + name.len();
+            continue;
+        }
+
+        let mut cursor = start + name.len();
+        while normalized
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            cursor += 1;
+        }
+        if normalized.as_bytes().get(cursor) != Some(&b'=') {
+            return Err(ProviderError::Unknown(
+                "mufg token attribute changed".into(),
+            ));
+        }
+        cursor += 1;
+        while normalized
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            cursor += 1;
+        }
+        let quote = *normalized
+            .as_bytes()
+            .get(cursor)
+            .filter(|quote| **quote == b'\'' || **quote == b'"')
+            .ok_or_else(|| ProviderError::Unknown("mufg token attribute changed".into()))?;
+        let value_start = cursor + 1;
+        let value_end = normalized[value_start..]
+            .find(char::from(quote))
+            .map(|relative_end| value_start + relative_end)
+            .ok_or_else(|| ProviderError::Unknown("mufg token attribute changed".into()))?;
+        return Ok(Some(&tag[value_start..value_end]));
+    }
+    Ok(None)
+}
+
+/// Return whether the MUFG CAPTCHA marker's own `<div>` container is
+/// explicitly hidden. Missing or malformed element boundaries are ambiguous.
+fn captcha_marker_hidden(page: &str, marker: usize) -> Option<bool> {
+    let marker_start = page[..marker].rfind('<')?;
+    if page[marker_start..marker].contains('>') {
+        return None;
+    }
+    let marker_end = marker_start + page[marker_start..].find('>')?;
+
+    let before_marker = &page[..marker_start];
+    let container_start = before_marker.rfind("<div")?;
+    if before_marker[container_start..].contains("</div>") {
+        return None;
+    }
+    let container_end = container_start + page[container_start..].find('>')?;
+    if container_end >= marker_start || !page[marker_end + 1..].contains("</div>") {
+        return None;
+    }
+
+    let context = format!(
+        "{}{}",
+        &page[container_start..=container_end],
+        &page[marker_start..=marker_end]
+    );
+    let compact: String = context
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+    Some(compact.contains("display:none"))
 }
 
 /// Extract the value inside `<tag>value</tag>` starting at the front of
