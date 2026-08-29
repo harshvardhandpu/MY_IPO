@@ -1,7 +1,7 @@
 # Current State
 
 - **Branch:** `feature/multi-registrar` (from Phase 3B closeout / `b9f8c0f`)
-- **HEAD:** Gate 4A implementation lock (parent `d2bf075`)
+- **HEAD before Gate 4D closure record:** `82971e0` (`fix(mufg): fail closed on captcha and parser ambiguity`)
 - **Phase 2C:** CLOSED
 - **Phase 3A:** CLOSED (fixture allotment)
 - **Phase 3B:** CLOSED (secure key provider, live-adapter boundary, durable worker, manual/profit APIs)
@@ -16,13 +16,15 @@
 - **Gate 4B independent review:** PASS WITH NON-BLOCKING FINDINGS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking findings
 - **Phase 3C Gate 4C:** **APPROVED AND LOCKED** (Bigshare human-verification adapter: fail-closed unattended check → NEEDS_HUMAN_VERIFICATION, fixture-backed `ddlCompany` discovery + ASP.NET result parsing, guarded `not_found`/`operational()` constructors, `HumanVerificationChallenge` lifecycle state machine, 29 focused tests, sanitized fixtures with SHA-256 provenance; commit `cbbe285`)
 - **Gate 4C independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking, two accepted non-blocking findings (bounded HTML scanners; lexical RFC3339 expiry compare)
+- **Phase 3C Gate 4D:** **APPROVED AND LOCKED** (MUFG session/token adapter at `db5be5d`; fail-closed correction at `82971e0`; 40 focused tests; sanitized fixtures with SHA-256 provenance)
+- **Gate 4D independent re-review:** PASS — `moonshotai/kimi-k3` via NVIDIA NIM (free), 2026-08-29; original CAPTCHA visibility blocker resolved, zero blocking findings
 - **Date:** 2026-08-29
 
 ## Model routing (binding)
 
 **GEMINI = DISABLED FOR SANKET IPO BY OWNER POLICY (2026-08-29, PERMANENT).** Gemini is barred from every Sanket IPO role — implementation, debugging, architecture, research, independent review, and fallback execution. Prior Gemini review artifacts (2C, 3B, 4A) remain historical fact; no future Gemini use in any capacity.
 
-Independent-reviewer selection rules for this repo: model must be (1) free — zero paid usage, any 402/insufficient-balance route excluded; (2) healthy and coherent on a probe; (3) independent of implementers (GLM 5.3 = active chat model, DeepSeek V4 Pro = Gate 4B implementer). Route inventory 2026-08-29: groq `openai/gpt-oss-120b` healthy but 8K TPM cap rejects the evidence pack; generalcompute `gpt-oss-120b` healthy, coherent, **selected**; generalcompute MiniMax M2.7 degenerate — verdicts rejected; TokenRouter Qwen 403; Kimi K3 402 paid; omni proxy down; inferex deepseek-v4-flash rate-limited (low-priority fallback only).
+Independent-reviewer selection rules for this repo: model must be (1) free — zero paid usage, any 402/insufficient-balance route excluded; (2) healthy and coherent; (3) independent of implementers. Gate 4D route record, 2026-08-29: generalcompute `gpt-oss-120b` returned HTTP 404 and was unavailable; DeepSeek V4 Pro/Flash on NVIDIA NIM timed out; `moonshotai/kimi-k3` on NVIDIA NIM was healthy, free, metadata-confirmed, and selected for the initial review and correction re-review. The separate TokenRouter Kimi route returned 402 and remains excluded. Gate 4D original implementation routing was GLM 5.3 via TokenRouter; the correction runtime was `gpt-5.6-sol` via `openai-codex`; Kimi K3 was independent of both.
 
 ## Security posture
 
@@ -64,7 +66,7 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - `docs/plans/multi-registrar-allotment/02-live-validation.md` records the current cross-provider capability matrix and Gate 2 verdict.
 - KFintech: public page/API contract and 64 issue records observed; no CAPTCHA; existing adapter needs a major isolated update.
 - Bigshare: three public servers available at final check; server-verified CAPTCHA requires human continuation; one transient Server 2 HTTP 503 and live page drift observed.
-- MUFG Intime: public discovery returned four issue ids; result path uses JavaScript/session/token; CAPTCHA markup is currently hidden/dormant; adapter not implemented.
+- MUFG Intime: public discovery returned four issue ids; result path uses JavaScript/session/token; CAPTCHA markup was hidden/dormant during research. Gate 4D fixture-backed session/token adapter is implemented and independently approved; real investor lookup remains blocked.
 - Registrar details: `docs/research/registrars/KFINTECH.md`, `BIGSHARE.md`, and `MUFG_INTIME.md`.
 
 ### Gate 3 provider design
@@ -92,13 +94,24 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - Manual negative reports remain `MANUAL_RESULT`, never provider-confirmed `NOT_ALLOTTED`.
 - Review: `docs/reviews/GATE_4A_INDEPENDENT_REVIEW.md` — PASS.
 
+### Gate 4D MUFG session/token adapter
+
+- Identifier-free issue discovery parses only verified JSON-wrapped MUFG XML structure.
+- Session cookie and exactly one non-empty `hidToken` remain ephemeral; lookup-request debug output is redacted and the request type is not serde-serializable.
+- CAPTCHA detection is marker/container-scoped: visible is `Required`, explicit hidden is `Dormant`, and malformed/ambiguous markup is `Unknown`.
+- Positive and negative financial results remain reachable only through their guarded proof constructors; unknown/drifted/provider failures remain operational.
+- Implementation `db5be5d`; correction `82971e0`; independent correction re-review PASS.
+- Review: `docs/reviews/GATE_4D_INDEPENDENT_REVIEW.md`.
+
 ## Verification
 
 - `cargo fmt --all -- --check` — PASS
 - `cargo clippy --workspace --all-targets -- -D warnings` — PASS
 - `cargo test --workspace` — PASS
-- `npm run check` on host Node 26 — PASS (129-file secret scan, formatting, TypeScript, 4 Vitest, 4 Python tests)
+- `npm run check` on host Node 26 — PASS (151-file secret scan, formatting, TypeScript, 4 Vitest, 4 Python tests)
 - `npm run build` — PASS
+- Gate 4D focused MUFG suite — PASS (40/40)
+- Gate 4D fixture SHA-256 provenance and PAN/allotment invariants — PASS
 - Linux Secret Service generated-key write/read/delete smoke — PASS
 - Tauri debug executable, `.deb`, and `.rpm` artifacts produced (bridge response timed out after 300 seconds, artifacts verified afterward)
 - Independent review — PASS; see `docs/reviews/PHASE_3B_INDEPENDENT_REVIEW.md`
@@ -115,7 +128,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Implement Gate 4D MUFG session/token adapter (next approved slice; see `docs/plans/multi-registrar-allotment/04-slices.md`). Deferred debt carried into later slices: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow (adapters complete, runtime wiring is Gate 4E scope). Real PAN remains blocked.
+Implement Gate 4E cross-provider normalization and UI (next approved slice; see `docs/plans/multi-registrar-allotment/04-slices.md`). Deferred debt carried into later slices: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow. Gate 4D is approved and locked at `82971e0`. Real PAN remains blocked.
 
 ## Canonical commands
 

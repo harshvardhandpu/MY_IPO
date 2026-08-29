@@ -5,6 +5,9 @@
 - Gate 3 — Provider implementation design: **APPROVED AND LOCKED**
 - Gate 4 — Slice plan: **APPROVED — IMPLEMENTATION ORDER LOCKED**
 - Gate 4A — Shared provider runtime: **APPROVED AND LOCKED**
+- Gate 4B — KFintech adapter: **APPROVED AND LOCKED**
+- Gate 4C — Bigshare human-verification adapter: **APPROVED AND LOCKED**
+- Gate 4D — MUFG session/token adapter: **APPROVED AND LOCKED** (independent correction re-review PASS)
 
 ## Gate 1 lock record
 
@@ -52,7 +55,7 @@
 - [x] Gate 4A — shared capability/session/runtime changes
 - [x] Gate 4B — KFintech live-adapter replacement — PASS WITH NON-BLOCKING FINDINGS (`b281379`; review: `docs/reviews/GATE_4B_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4C — Bigshare human-verification adapter — PASS (`cbbe285`; review: `docs/reviews/GATE_4C_INDEPENDENT_REVIEW.md`)
-- [ ] Gate 4D — MUFG session/token adapter
+- [x] Gate 4D — MUFG session/token adapter — PASS (`db5be5d` + correction `82971e0`; review: `docs/reviews/GATE_4D_INDEPENDENT_REVIEW.md`)
 - [ ] Gate 4E — cross-provider normalization and UI
 - [ ] Gate 4F — independent review
 
