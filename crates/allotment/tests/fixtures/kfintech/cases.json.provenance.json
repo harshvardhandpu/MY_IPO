@@ -1,0 +1,9 @@
+{
+  "provider": "kfintech-live",
+  "source_url": "https://0uz601ms56.execute-api.ap-south-1.amazonaws.com/prod/api/query",
+  "retrieved_at": "2026-08-28T18:09:00Z",
+  "fixture_type": "RESULT_CASES",
+  "sanitized": true,
+  "content_sha256": "e3d953f1d68059627d23bcdd141dfeb0276cbf4f2b528663fdca9f19bbdd1258",
+  "structural_fingerprint": "kfin-result-data-array-v1"
+}

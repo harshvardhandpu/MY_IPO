@@ -1,0 +1,61 @@
+{
+  "allotted": {
+    "data": [
+      {
+        "Appln_No": "[SYNTHETIC_APPLICATION]",
+        "Name": "[SYNTHETIC_NAME]",
+        "DP_CLID": "[SYNTHETIC_DEMAT]",
+        "Pan_No": "[SYNTHETIC_LOOKUP]",
+        "App_Shares": 70,
+        "All_Shares": 35
+      }
+    ]
+  },
+  "not_allotted": {
+    "data": [
+      {
+        "Appln_No": "[SYNTHETIC_APPLICATION]",
+        "Name": "[SYNTHETIC_NAME]",
+        "DP_CLID": "[SYNTHETIC_DEMAT]",
+        "Pan_No": "[SYNTHETIC_LOOKUP]",
+        "App_Shares": 70,
+        "All_Shares": 0
+      }
+    ]
+  },
+  "pending": {
+    "data": [
+      {
+        "Appln_No": "[SYNTHETIC_APPLICATION]",
+        "Name": "[SYNTHETIC_NAME]",
+        "DP_CLID": "[SYNTHETIC_DEMAT]",
+        "Pan_No": "[SYNTHETIC_LOOKUP]",
+        "App_Shares": 70,
+        "All_Shares": null
+      }
+    ]
+  },
+  "unknown": { "message": "[SYNTHETIC_UNKNOWN]" },
+  "malformed_zero_text": { "message": "Not Allotted: 0 shares" },
+  "duplicate": {
+    "data": [
+      {
+        "Appln_No": "[SYNTHETIC_APPLICATION_1]",
+        "Name": "[SYNTHETIC_NAME]",
+        "DP_CLID": "[SYNTHETIC_DEMAT]",
+        "Pan_No": "[SYNTHETIC_LOOKUP]",
+        "App_Shares": 70,
+        "All_Shares": 0
+      },
+      {
+        "Appln_No": "[SYNTHETIC_APPLICATION_2]",
+        "Name": "[SYNTHETIC_NAME]",
+        "DP_CLID": "[SYNTHETIC_DEMAT]",
+        "Pan_No": "[SYNTHETIC_LOOKUP]",
+        "App_Shares": 70,
+        "All_Shares": 0
+      }
+    ]
+  },
+  "changed_wrapper": { "records": [] }
+}

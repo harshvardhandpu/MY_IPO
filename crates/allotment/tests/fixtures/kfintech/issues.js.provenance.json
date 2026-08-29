@@ -1,0 +1,9 @@
+{
+  "provider": "kfintech-live",
+  "source_url": "https://ipostatus.kfintech.com",
+  "retrieved_at": "2026-08-28T18:09:00Z",
+  "fixture_type": "ISSUE_LIST",
+  "sanitized": true,
+  "content_sha256": "e8106453cee9d670450998e6a59c78d10d3f093ca6fe5c504f27f1a5f13d9abb",
+  "structural_fingerprint": "kfin-issues-clientId-name-v1"
+}

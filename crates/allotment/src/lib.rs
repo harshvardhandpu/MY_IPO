@@ -5,6 +5,7 @@
 //! application service — never via LLM/agent context.
 
 mod job;
+mod kfintech;
 mod kfintech_live;
 mod profit;
 mod provider;
@@ -16,6 +17,7 @@ pub use job::{
     AllotmentCheckAttempt, AllotmentCheckJob, AllotmentJobError, AllotmentJobStatus,
     AllotmentResultSource, AttemptStatus, ManualReportedOutcome, ManualResultInput,
 };
+pub use kfintech::{KfintechIssue, KfintechProvider};
 pub use kfintech_live::{DiscoveredIssue, LiveKfintechProvider};
 pub use profit::{EstimatedProfit, ProfitPriceBasis};
 pub use provider::{

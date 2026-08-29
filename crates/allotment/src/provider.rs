@@ -190,6 +190,33 @@ pub struct SanitizedFixtureProvenance {
 }
 
 impl SanitizedFixtureProvenance {
+    pub fn from_json(json: &str) -> Result<Self, SafeProviderMetadataError> {
+        #[derive(Deserialize)]
+        struct Document {
+            provider: String,
+            source_url: String,
+            retrieved_at: String,
+            fixture_type: String,
+            sanitized: bool,
+            content_sha256: String,
+            structural_fingerprint: Option<String>,
+        }
+
+        let document: Document =
+            serde_json::from_str(json).map_err(|_| SafeProviderMetadataError)?;
+        if !document.sanitized {
+            return Err(SafeProviderMetadataError);
+        }
+        Self::new(
+            document.provider,
+            document.source_url,
+            document.retrieved_at,
+            document.fixture_type,
+            document.content_sha256,
+            document.structural_fingerprint,
+        )
+    }
+
     pub fn new(
         provider: impl Into<String>,
         source_url: impl Into<String>,
@@ -227,6 +254,15 @@ impl SanitizedFixtureProvenance {
                 .as_deref()
                 .is_none_or(is_safe_identifier);
         valid.then_some(provenance).ok_or(SafeProviderMetadataError)
+    }
+
+    pub fn verify_content(&self, content: &[u8]) -> Result<(), SafeProviderMetadataError> {
+        use sha2::{Digest, Sha256};
+
+        let actual = format!("{:x}", Sha256::digest(content));
+        (actual == self.content_sha256)
+            .then_some(())
+            .ok_or(SafeProviderMetadataError)
     }
 }
 
@@ -282,6 +318,28 @@ impl NegativeResultProof {
     }
 }
 
+/// A positively recognized provider allotment is structurally constrained:
+/// it must carry a positive share count and an unambiguous confirmed marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PositiveResultProof(()); // ponytail: unit proof mirrors NegativeResultProof; add fields if drift demands it
+
+impl PositiveResultProof {
+    pub fn new(
+        provider_confirmed: bool,
+        structure_confirmed: bool,
+        allotted_marker_confirmed: bool,
+        unambiguous: bool,
+    ) -> Result<Self, ProviderError> {
+        if provider_confirmed && structure_confirmed && allotted_marker_confirmed && unambiguous {
+            Ok(Self(()))
+        } else {
+            Err(ProviderError::Unknown(
+                "allotted result proof is incomplete".into(),
+            ))
+        }
+    }
+}
+
 /// Safe provider outcome — never contains PAN. Final negative construction is guarded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderAllotmentResult {
@@ -303,6 +361,49 @@ impl ProviderAllotmentResult {
     ) -> Self {
         Self {
             status: NormalizedAllotmentStatus::NotAllotted,
+            allotted_lots: None,
+            allotted_shares: None,
+            provider_reference: None,
+            checked_at: checked_at.into(),
+            safe_message: None,
+            contract_fingerprint: Some(contract_fingerprint.into()),
+            provenance: ProviderResultProvenance::ConfirmedProviderResponse,
+        }
+    }
+
+    /// Guarded affirmative constructor for a positively recognized provider
+    /// response. Refuses nil shares/lots: ALLOTTED without a positive quantity
+    /// is treated as ambiguity, never as a confirmed allotment.
+    pub fn confirmed_allotted(
+        _proof: PositiveResultProof,
+        allotted_shares: u64,
+        allotted_lots: Option<u32>,
+        provider_reference: Option<String>,
+        checked_at: impl Into<String>,
+        contract_fingerprint: impl Into<String>,
+    ) -> Result<Self, ProviderError> {
+        if allotted_shares == 0 {
+            return Err(ProviderError::Unknown(
+                "allotted result must carry a positive share count".into(),
+            ));
+        }
+        Ok(Self {
+            status: NormalizedAllotmentStatus::Allotted,
+            allotted_lots,
+            allotted_shares: Some(allotted_shares),
+            provider_reference,
+            checked_at: checked_at.into(),
+            safe_message: None,
+            contract_fingerprint: Some(contract_fingerprint.into()),
+            provenance: ProviderResultProvenance::ConfirmedProviderResponse,
+        })
+    }
+
+    /// A structurally valid single result record with a nil share count is a
+    /// recognized, unambiguous provider-pending state — never a final outcome.
+    pub fn pending(checked_at: impl Into<String>, contract_fingerprint: impl Into<String>) -> Self {
+        Self {
+            status: NormalizedAllotmentStatus::Pending,
             allotted_lots: None,
             allotted_shares: None,
             provider_reference: None,
