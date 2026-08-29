@@ -4,10 +4,11 @@
 - **Real PAN:** BLOCKED
 - **Gate 4A:** APPROVED AND LOCKED — independent review PASS
 - **Gate 4B:** APPROVED AND LOCKED — independent review PASS WITH NON-BLOCKING FINDINGS (gpt-oss-120b via generalcompute, 2026-08-29; `docs/reviews/GATE_4B_INDEPENDENT_REVIEW.md`)
+- **Gate 4C:** APPROVED AND LOCKED — independent review PASS (gpt-oss-120b via generalcompute, 2026-08-29; `docs/reviews/GATE_4C_INDEPENDENT_REVIEW.md`)
 
 1. Gate 4A — shared capability/session/runtime changes — **DONE**
 2. Gate 4B — KFintech live-adapter replacement — **DONE** (`b281379`)
-3. Gate 4C — Bigshare human-verification adapter
+3. Gate 4C — Bigshare human-verification adapter — **DONE** (`cbbe285`)
 4. Gate 4D — MUFG session/token adapter
 5. Gate 4E — cross-provider normalization and UI
 6. Gate 4F — independent review

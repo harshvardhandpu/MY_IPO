@@ -14,6 +14,8 @@
 - **Gate 4A independent review:** PASS — Gemini 3.6 Flash, 2026-08-29
 - **Phase 3C Gate 4B:** **APPROVED AND LOCKED** (KFintech bounded fixture-driven parser, guarded affirmative/pending constructors, sanitized fixtures, 13 focused tests; commit `b281379`)
 - **Gate 4B independent review:** PASS WITH NON-BLOCKING FINDINGS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking findings
+- **Phase 3C Gate 4C:** **APPROVED AND LOCKED** (Bigshare human-verification adapter: fail-closed unattended check → NEEDS_HUMAN_VERIFICATION, fixture-backed `ddlCompany` discovery + ASP.NET result parsing, guarded `not_found`/`operational()` constructors, `HumanVerificationChallenge` lifecycle state machine, 29 focused tests, sanitized fixtures with SHA-256 provenance; commit `cbbe285`)
+- **Gate 4C independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking, two accepted non-blocking findings (bounded HTML scanners; lexical RFC3339 expiry compare)
 - **Date:** 2026-08-29
 
 ## Model routing (binding)
@@ -113,7 +115,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Implement Gate 4C Bigshare human-verification adapter (next approved slice; see `docs/plans/multi-registrar-allotment/04-slices.md`). Deferred Gate 4B debt carried into later slices: `check_allotment` live transport request construction (client_id/reqparam/lookup-type headers, task item 10); `provider_reference` population pending verified `Appln_No` semantics. Real PAN remains blocked.
+Implement Gate 4D MUFG session/token adapter (next approved slice; see `docs/plans/multi-registrar-allotment/04-slices.md`). Deferred debt carried into later slices: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow (adapters complete, runtime wiring is Gate 4E scope). Real PAN remains blocked.
 
 ## Canonical commands
 

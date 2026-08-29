@@ -51,7 +51,7 @@
 
 - [x] Gate 4A — shared capability/session/runtime changes
 - [x] Gate 4B — KFintech live-adapter replacement — PASS WITH NON-BLOCKING FINDINGS (`b281379`; review: `docs/reviews/GATE_4B_INDEPENDENT_REVIEW.md`)
-- [ ] Gate 4C — Bigshare human-verification adapter
+- [x] Gate 4C — Bigshare human-verification adapter — PASS (`cbbe285`; review: `docs/reviews/GATE_4C_INDEPENDENT_REVIEW.md`)
 - [ ] Gate 4D — MUFG session/token adapter
 - [ ] Gate 4E — cross-provider normalization and UI
 - [ ] Gate 4F — independent review
