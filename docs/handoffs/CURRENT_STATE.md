@@ -12,7 +12,15 @@
 - **Gate 3 verdict:** **PASS — IMPLEMENTATION DESIGN READY**
 - **Phase 3C Gate 4A:** **APPROVED AND LOCKED**
 - **Gate 4A independent review:** PASS — Gemini 3.6 Flash, 2026-08-29
+- **Phase 3C Gate 4B:** **APPROVED AND LOCKED** (KFintech bounded fixture-driven parser, guarded affirmative/pending constructors, sanitized fixtures, 13 focused tests; commit `b281379`)
+- **Gate 4B independent review:** PASS WITH NON-BLOCKING FINDINGS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking findings
 - **Date:** 2026-08-29
+
+## Model routing (binding)
+
+**GEMINI = DISABLED FOR SANKET IPO BY OWNER POLICY (2026-08-29, PERMANENT).** Gemini is barred from every Sanket IPO role — implementation, debugging, architecture, research, independent review, and fallback execution. Prior Gemini review artifacts (2C, 3B, 4A) remain historical fact; no future Gemini use in any capacity.
+
+Independent-reviewer selection rules for this repo: model must be (1) free — zero paid usage, any 402/insufficient-balance route excluded; (2) healthy and coherent on a probe; (3) independent of implementers (GLM 5.3 = active chat model, DeepSeek V4 Pro = Gate 4B implementer). Route inventory 2026-08-29: groq `openai/gpt-oss-120b` healthy but 8K TPM cap rejects the evidence pack; generalcompute `gpt-oss-120b` healthy, coherent, **selected**; generalcompute MiniMax M2.7 degenerate — verdicts rejected; TokenRouter Qwen 403; Kimi K3 402 paid; omni proxy down; inferex deepseek-v4-flash rate-limited (low-priority fallback only).
 
 ## Security posture
 
@@ -105,7 +113,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Implement Gate 4B KFintech live-adapter replacement against sanitized fixtures. Real PAN remains blocked.
+Implement Gate 4C Bigshare human-verification adapter (next approved slice; see `docs/plans/multi-registrar-allotment/04-slices.md`). Deferred Gate 4B debt carried into later slices: `check_allotment` live transport request construction (client_id/reqparam/lookup-type headers, task item 10); `provider_reference` population pending verified `Appln_No` semantics. Real PAN remains blocked.
 
 ## Canonical commands
 
