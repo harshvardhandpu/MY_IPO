@@ -20,6 +20,7 @@
 - **Gate 4D independent re-review:** PASS — `moonshotai/kimi-k3` via NVIDIA NIM (free), 2026-08-29; original CAPTCHA visibility blocker resolved, zero blocking findings
 - **Phase 3C Gate 4E:** **APPROVED AND LOCKED** (cross-provider normalization + unified allotment UI; commit `1a57379`)
 - **Gate 4E independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking findings
+- **Gate 4F final system review:** **COMPLETE** — PASS WITH NON-BLOCKING FINDINGS (`moonshotai/kimi-k3` via NVIDIA NIM, free, 2026-08-29); pilot readiness YES — WITH NON-BLOCKING CONDITIONS (five pre-pilot conditions; real PAN still blocked)
 - **Date:** 2026-08-29
 
 ## Model routing (binding)
@@ -130,7 +131,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Gate 4E is CLOSED and locked at commit `1a57379` (independent review PASS — gpt-oss-120b via generalcompute). Next: Gate 4F (not yet started). Deferred debt carried forward: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow. Real PAN remains blocked.
+Multi-registrar allotment subsystem (Gates 4A–4E) is fully implemented and independently reviewed; Gate 4F final system review is COMPLETE (PASS WITH NON-BLOCKING FINDINGS). Next: address the five pre-pilot conditions recorded in `docs/reviews/GATE_4F_INDEPENDENT_REVIEW.md` before any controlled real-PAN pilot execution: (1) remove/replace the `curl` shell-out in `kfintech_live.rs`, (2) wire per-provider `ProviderRatePolicy` into the service limiter, (3) demonstrate lease enforcement at the execution boundary, (4) unify `resolve`/`resolve_registrar` alias sets, (5) fix the cross-registrar `official_status_url` default. Real PAN remains blocked; no investor lookup is authorized.
 
 ## Gate 4E implemented
 

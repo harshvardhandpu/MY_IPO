@@ -9,6 +9,7 @@
 - Gate 4C — Bigshare human-verification adapter: **APPROVED AND LOCKED**
 - Gate 4D — MUFG session/token adapter: **APPROVED AND LOCKED** (independent correction re-review PASS)
 - Gate 4E — Cross-provider normalization + unified UI: **APPROVED AND LOCKED** (independent review PASS, gpt-oss-120b via generalcompute)
+- Gate 4F — Final system review: **COMPLETE** — PASS WITH NON-BLOCKING FINDINGS (kimi-k3 via NVIDIA NIM); pilot readiness YES WITH CONDITIONS
 
 ## Gate 1 lock record
 
@@ -58,7 +59,7 @@
 - [x] Gate 4C — Bigshare human-verification adapter — PASS (`cbbe285`; review: `docs/reviews/GATE_4C_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4D — MUFG session/token adapter — PASS (`db5be5d` + correction `82971e0`; review: `docs/reviews/GATE_4D_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4E — cross-provider normalization and UI — PASS (`1a57379`; review: `docs/reviews/GATE_4E_INDEPENDENT_REVIEW.md`)
-- [ ] Gate 4F — independent review
+- [x] Gate 4F — final system review — PASS WITH NON-BLOCKING FINDINGS (review: `docs/reviews/GATE_4F_INDEPENDENT_REVIEW.md`)
 
 ## Verified starting point
 
