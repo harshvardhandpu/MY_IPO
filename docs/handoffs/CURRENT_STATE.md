@@ -18,7 +18,8 @@
 - **Gate 4C independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking, two accepted non-blocking findings (bounded HTML scanners; lexical RFC3339 expiry compare)
 - **Phase 3C Gate 4D:** **APPROVED AND LOCKED** (MUFG session/token adapter at `db5be5d`; fail-closed correction at `82971e0`; 40 focused tests; sanitized fixtures with SHA-256 provenance)
 - **Gate 4D independent re-review:** PASS — `moonshotai/kimi-k3` via NVIDIA NIM (free), 2026-08-29; original CAPTCHA visibility blocker resolved, zero blocking findings
-- **Phase 3C Gate 4E:** **IMPLEMENTED — UNCOMMITTED** (cross-provider normalization + unified allotment UI; see below)
+- **Phase 3C Gate 4E:** **APPROVED AND LOCKED** (cross-provider normalization + unified allotment UI; commit `1a57379`)
+- **Gate 4E independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking findings
 - **Date:** 2026-08-29
 
 ## Model routing (binding)
@@ -129,7 +130,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Gate 4E implementation is complete and green (see "Gate 4E implemented" below). Next: (1) commit the Gate 4E diff as a focused logical commit on `feature/multi-registrar`; (2) run the required independent review with a free, independent model (Kimi K3 / DeepSeek V4 Pro / gpt-oss-120b, whichever is healthy — NOT Gemini); (3) on PASS, close Gate 4E and lock it before Gate 4F. Deferred debt carried forward: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow. Real PAN remains blocked.
+Gate 4E is CLOSED and locked at commit `1a57379` (independent review PASS — gpt-oss-120b via generalcompute). Next: Gate 4F (not yet started). Deferred debt carried forward: Gate 4B `check_allotment` live transport request construction (task item 10), `provider_reference` population pending verified `Appln_No` semantics; Gate 4C isolated verification-surface wiring and challenge presentation flow. Real PAN remains blocked.
 
 ## Gate 4E implemented
 

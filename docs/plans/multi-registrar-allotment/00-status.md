@@ -8,6 +8,7 @@
 - Gate 4B — KFintech adapter: **APPROVED AND LOCKED**
 - Gate 4C — Bigshare human-verification adapter: **APPROVED AND LOCKED**
 - Gate 4D — MUFG session/token adapter: **APPROVED AND LOCKED** (independent correction re-review PASS)
+- Gate 4E — Cross-provider normalization + unified UI: **APPROVED AND LOCKED** (independent review PASS, gpt-oss-120b via generalcompute)
 
 ## Gate 1 lock record
 
@@ -56,7 +57,7 @@
 - [x] Gate 4B — KFintech live-adapter replacement — PASS WITH NON-BLOCKING FINDINGS (`b281379`; review: `docs/reviews/GATE_4B_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4C — Bigshare human-verification adapter — PASS (`cbbe285`; review: `docs/reviews/GATE_4C_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4D — MUFG session/token adapter — PASS (`db5be5d` + correction `82971e0`; review: `docs/reviews/GATE_4D_INDEPENDENT_REVIEW.md`)
-- [ ] Gate 4E — cross-provider normalization and UI
+- [x] Gate 4E — cross-provider normalization and UI — PASS (`1a57379`; review: `docs/reviews/GATE_4E_INDEPENDENT_REVIEW.md`)
 - [ ] Gate 4F — independent review
 
 ## Verified starting point
