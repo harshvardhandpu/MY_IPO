@@ -187,21 +187,37 @@ fn parse_issue_candidates(body: &str) -> Vec<DiscoveredIssue> {
     out
 }
 
+const KFINTECH_HOST_ALLOWLIST: &[&str] = &["ipostatus.kfintech.com"];
+const MAX_RESPONSE_BYTES: u64 = 1024 * 1024; // 1 MiB cap
+
 fn http_get_text(url: &str) -> Result<String, String> {
-    // ponytail: shell-out GET until we add ureq; upgrade if curl absent in CI.
-    let output = std::process::Command::new("curl")
-        .args([
-            "-fsSL",
-            "--max-time",
-            "15",
-            "-A",
-            "SanketIPO/0.1 (+local; allotment-discovery)",
-            url,
-        ])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(format!("curl exit {}", output.status));
+    let agent = crate::http::SharedHttpClient::global();
+    // Typed, fail-closed status. No shell-out; TLS enforced via rustls roots.
+    match agent.get(
+        url,
+        KFINTECH_HOST_ALLOWLIST,
+        MAX_RESPONSE_BYTES,
+        crate::http::TIMEOUT_SECS,
+    ) {
+        Ok(body) => Ok(body),
+        Err(crate::http::HttpPolicyError::RateLimited) => {
+            Err("provider rate-limited or transport denied".to_owned())
+        }
+        Err(crate::http::HttpPolicyError::Transport(err)) => Err(format!("transport: {err}")),
+        Err(crate::http::HttpPolicyError::SizeCapExceeded(limit)) => {
+            Err(format!("response body exceeded {limit} bytes"))
+        }
+        Err(crate::http::HttpPolicyError::Status(code)) => Err(format!("http status {code}")),
+        Err(crate::http::HttpPolicyError::HostNotAllowed { host }) => {
+            Err(format!("host not allowed: {host}"))
+        }
+        Err(crate::http::HttpPolicyError::RedirectNotAllowed { host }) => {
+            Err(format!("redirect not allowed: {host}"))
+        }
+        Err(crate::http::HttpPolicyError::TooManyRedirects) => Err("too many redirects".to_owned()),
+        Err(crate::http::HttpPolicyError::InvalidUrl) => Err("invalid url".to_owned()),
+        Err(crate::http::HttpPolicyError::UnexpectedContentType(ct)) => {
+            Err(format!("unexpected content-type: {ct}"))
+        }
     }
-    String::from_utf8(output.stdout).map_err(|e| e.to_string())
 }

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::ProviderId;
 use crate::status::NormalizedAllotmentStatus;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderRatePolicy {
     pub min_interval_ms: u64,
     pub max_attempts: u32,
@@ -69,37 +69,53 @@ impl ProviderRatePolicy {
 }
 
 /// Process-local limiter: one provider at a time with min spacing.
+/// Policies are per provider id (Gate 4F condition B): `wait_turn` selects
+/// the policy registered for that provider, never one global Default.
 pub struct ProviderRateLimiter {
     inner: Mutex<HashMap<String, Instant>>,
-    policy: ProviderRatePolicy,
+    policy: Mutex<HashMap<String, ProviderRatePolicy>>,
 }
 
 impl ProviderRateLimiter {
     pub fn new(policy: ProviderRatePolicy) -> Self {
+        let mut policies = HashMap::new();
+        policies.insert(String::new(), policy);
         Self {
             inner: Mutex::new(HashMap::new()),
-            policy,
+            policy: Mutex::new(policies),
         }
     }
 
-    pub fn policy(&self) -> &ProviderRatePolicy {
-        &self.policy
+    /// Register (or replace) the policy for a provider id.
+    pub fn set_policy(&self, provider_id: &str, policy: ProviderRatePolicy) {
+        let mut map = self.policy.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(provider_id.to_owned(), policy);
+    }
+
+    /// The policy that governs a provider id; falls back to the
+    /// default-keyed policy (set at construction) if none registered.
+    pub fn policy_for(&self, provider_id: &str) -> ProviderRatePolicy {
+        let map = self.policy.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(provider_id)
+            .or_else(|| map.get(""))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Blocks until the provider may fire (simple sleep-based gate).
     pub fn wait_turn(&self, provider_id: &str) {
-        let wait = {
+        let min = {
             let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(last) = map.get(provider_id) {
-                let elapsed = last.elapsed();
-                let min = Duration::from_millis(self.policy.min_interval_ms);
-                min.checked_sub(elapsed).unwrap_or_default()
-            } else {
-                Duration::ZERO
+            let min_interval = self.policy_for(provider_id).min_interval_ms;
+            match map.get(provider_id) {
+                Some(last) => Duration::from_millis(min_interval)
+                    .checked_sub(last.elapsed())
+                    .unwrap_or_default(),
+                None => Duration::ZERO,
             }
         };
-        if !wait.is_zero() {
-            std::thread::sleep(wait);
+        if !min.is_zero() {
+            std::thread::sleep(min);
         }
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         map.insert(provider_id.to_owned(), Instant::now());

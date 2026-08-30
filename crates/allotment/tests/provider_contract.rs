@@ -9,6 +9,85 @@ use sanket_allotment::{
 };
 
 #[test]
+fn registry_alias_resolution_is_unified_and_fails_closed() {
+    // Gate 4F condition E: one canonical policy for both resolvers.
+    use sanket_allotment::ProviderId;
+
+    // Canonical ids resolve in BOTH resolvers to the same provider.
+    for (input, expected) in [
+        ("kfintech", ProviderId::KfintechLive),
+        ("bigshare", ProviderId::BigshareLive),
+        ("mufg_intime", ProviderId::MufgIntimeLive),
+    ] {
+        assert_eq!(ProviderRegistry::resolve(input), Some(expected));
+        let d = ProviderRegistry::resolve_registrar(input)
+            .unwrap_or_else(|| panic!("resolve_registrar must know {input}"));
+        assert_eq!(d.provider_id, expected, "{input}");
+    }
+
+    // Accepted aliases (space and underscore forms) normalize identically
+    // in BOTH resolvers — no divergent alias sets.
+    for alias in [
+        "KFintech",
+        "KFIN Technologies",
+        "kfin technologies",
+        "Bigshare Services",
+        "bigshare services",
+        "Link Intime",
+        "link intime",
+        "MUFG Intime",
+        "mufg intime",
+    ] {
+        let via_resolve = ProviderRegistry::resolve(alias);
+        let via_registrar = ProviderRegistry::resolve_registrar(alias);
+        assert_eq!(
+            via_resolve,
+            via_registrar.map(|d| d.provider_id),
+            "resolve and resolve_registrar must agree on {alias:?}"
+        );
+        assert!(via_resolve.is_some(), "alias {alias:?} must resolve");
+    }
+
+    // Unknown / unsupported / ambiguous: FAIL CLOSED in both.
+    for unknown in [
+        "unknown registrar",
+        "acme kfin-like services",
+        "linkintime",
+        "symbiotic",
+        "",
+    ] {
+        assert!(
+            ProviderRegistry::resolve(unknown).is_none(),
+            "resolve must fail closed on {unknown:?}"
+        );
+        assert!(
+            ProviderRegistry::resolve_registrar(unknown).is_none(),
+            "resolve_registrar must fail closed on {unknown:?}"
+        );
+    }
+
+    // Explicit provider ids (persisted jobs) still resolve.
+    assert_eq!(
+        ProviderRegistry::resolve("kfintech-live"),
+        Some(ProviderId::KfintechLive)
+    );
+    assert_eq!(
+        ProviderRegistry::resolve("bigshare-live"),
+        Some(ProviderId::BigshareLive)
+    );
+    assert_eq!(
+        ProviderRegistry::resolve("mufg-intime-live"),
+        Some(ProviderId::MufgIntimeLive)
+    );
+    assert_eq!(
+        ProviderRegistry::resolve("kfintech-fixture"),
+        Some(ProviderId::KfintechFixture)
+    );
+    // But provider ids are NOT registrar descriptors (no descriptor row).
+    assert!(ProviderRegistry::resolve_registrar("kfintech-live").is_none());
+}
+
+#[test]
 fn shared_capabilities_and_registry_are_typed() {
     let capabilities = FixtureKfintechProvider.capabilities();
     assert_eq!(capabilities.issue_discovery, IssueDiscoveryMode::None);
@@ -75,6 +154,72 @@ fn retry_policy_is_provider_specific() {
     assert_eq!(fixture.max_attempts, 1);
     assert_eq!(kfintech.max_attempts, 3);
     assert_eq!(bigshare.max_attempts, 1);
+}
+
+#[test]
+fn limiter_wiring_selects_policy_per_provider() {
+    // Gate 4F condition B: one limiter, per-provider policies — no global
+    // Default spacing for every registrar.
+    use std::time::Instant;
+
+    let limiter = sanket_allotment::ProviderRateLimiter::new(Default::default());
+    for kind in [
+        ProviderId::KfintechFixture,
+        ProviderId::KfintechLive,
+        ProviderId::BigshareLive,
+        ProviderId::MufgIntimeLive,
+    ] {
+        limiter.set_policy(
+            kind.as_str(),
+            sanket_allotment::ProviderRatePolicy::for_provider(kind),
+        );
+    }
+
+    // Registered policies are distinct and match the per-provider values.
+    assert_eq!(limiter.policy_for("kfintech-fixture").min_interval_ms, 0);
+    assert_eq!(limiter.policy_for("kfintech-fixture").max_attempts, 1);
+    assert_eq!(limiter.policy_for("kfintech-live").min_interval_ms, 1_500);
+    assert_eq!(limiter.policy_for("kfintech-live").max_attempts, 3);
+    assert_eq!(limiter.policy_for("bigshare-live").max_attempts, 1);
+    assert_eq!(limiter.policy_for("mufg-intime-live").max_attempts, 2);
+    // Distinctness across the three live registrars is the point.
+    let k = limiter.policy_for("kfintech-live");
+    let b = limiter.policy_for("bigshare-live");
+    let m = limiter.policy_for("mufg-intime-live");
+    assert!(
+        k != b && b != m && k != m,
+        "live policies must not collapse"
+    );
+
+    // wait_turn uses the provider's own spacing: fixture (0ms) fires twice
+    // immediately; a 1500ms provider's second turn must report wait.
+    let t0 = Instant::now();
+    limiter.wait_turn("kfintech-fixture");
+    limiter.wait_turn("kfintech-fixture");
+    assert!(
+        t0.elapsed().as_millis() < 500,
+        "fixture must not be rate-limited"
+    );
+
+    let limiter2 = sanket_allotment::ProviderRateLimiter::new(Default::default());
+    for kind in [
+        ProviderId::KfintechLive,
+        ProviderId::BigshareLive,
+        ProviderId::MufgIntimeLive,
+    ] {
+        limiter2.set_policy(
+            kind.as_str(),
+            sanket_allotment::ProviderRatePolicy::for_provider(kind),
+        );
+    }
+    limiter2.wait_turn("kfintech-live");
+    let t1 = Instant::now();
+    limiter2.wait_turn("kfintech-live");
+    assert!(
+        t1.elapsed().as_millis() >= 1_400,
+        "second kfintech-live call must be spaced ~1500ms, took {:?}ms",
+        t1.elapsed()
+    );
 }
 
 #[test]

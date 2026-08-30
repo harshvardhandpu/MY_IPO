@@ -26,7 +26,24 @@ pub const PRODUCTION_KEY_ID: &str = "os-keyring:v1:identity-key-v1";
 
 fn allotment_rate_limiter() -> &'static sanket_allotment::ProviderRateLimiter {
     static LIMITER: OnceLock<sanket_allotment::ProviderRateLimiter> = OnceLock::new();
-    LIMITER.get_or_init(|| sanket_allotment::ProviderRateLimiter::new(Default::default()))
+    LIMITER.get_or_init(|| {
+        // Gate 4F condition B: distinct per-provider policies, not one global
+        // Default. KfintechFixture stays zero-spacing (synthetic); live
+        // providers keep their tested spacing/attempt ceilings.
+        let limiter = sanket_allotment::ProviderRateLimiter::new(Default::default());
+        for kind in [
+            sanket_allotment::ProviderId::KfintechFixture,
+            sanket_allotment::ProviderId::KfintechLive,
+            sanket_allotment::ProviderId::BigshareLive,
+            sanket_allotment::ProviderId::MufgIntimeLive,
+        ] {
+            limiter.set_policy(
+                kind.as_str(),
+                sanket_allotment::ProviderRatePolicy::for_provider(kind),
+            );
+        }
+        limiter
+    })
 }
 
 fn execution_provider_id(
@@ -954,10 +971,18 @@ impl Application {
         let registrar_id = job.registrar_id.clone();
         let registrar_name = job.registrar_name.clone();
         let provider_id = job.provider_id.clone();
+        // Gate 4F condition C: the registrar URL must come from the persisted
+        // registry-resolved job. A missing URL fails closed — never defaulted
+        // to another registrar's portal.
         let official_url = job
             .official_status_url
             .clone()
-            .unwrap_or_else(|| "https://ipostatus.kfintech.com".into());
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                ServiceError::Invalid(format!(
+                    "allotment job {job_id} has no official status URL for registrar {registrar_id}"
+                ))
+            })?;
 
         let _job = sanket_allotment::AllotmentCheckJob::create(
             job_id.clone(),

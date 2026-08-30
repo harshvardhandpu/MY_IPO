@@ -31,22 +31,19 @@ pub struct ProviderDescriptor {
 pub struct ProviderRegistry;
 
 impl ProviderRegistry {
-    pub fn resolve(value: &str) -> Option<ProviderId> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "kfintech-fixture" => Some(ProviderId::KfintechFixture),
-            "kfintech" | "kfin technologies" | "kfintech-live" => Some(ProviderId::KfintechLive),
-            "bigshare" | "bigshare services" | "bigshare-live" => Some(ProviderId::BigshareLive),
-            "link intime" | "linkintime" | "mufg" | "mufg intime" | "mufg-intime-live" => {
-                Some(ProviderId::MufgIntimeLive)
-            }
-            _ => None,
-        }
+    /// One canonical alias normalization (Gate 4F condition E): trim,
+    /// lowercase, spaces fold to underscores. Every alias form —
+    /// "link intime", "link_intime", "KFIN Technologies" — lands on one
+    /// canonical key before lookup. Both `resolve` and `resolve_registrar`
+    /// go through this policy; unknown keys FAIL CLOSED (None).
+    fn canonical_key(value: &str) -> String {
+        value.trim().to_ascii_lowercase().replace(' ', "_")
     }
 
-    /// Resolve only explicit registrar ids/aliases. Product routing never uses
-    /// company-name substring guesses.
-    pub fn resolve_registrar(value: &str) -> Option<ProviderDescriptor> {
-        match value.trim().to_ascii_lowercase().as_str() {
+    /// The single registrar alias table. Both resolvers share it — no
+    /// divergent alias sets.
+    fn descriptor_for_key(key: &str) -> Option<ProviderDescriptor> {
+        match key {
             "kfintech" | "kfin_technologies" => Some(ProviderDescriptor {
                 registrar_id: "kfintech",
                 registrar_name: "KFintech",
@@ -67,5 +64,26 @@ impl ProviderRegistry {
             }),
             _ => None,
         }
+    }
+
+    /// Resolve a registrar alias (or explicit provider id) to its provider.
+    /// Never resolves by company-name substring guessing.
+    pub fn resolve(value: &str) -> Option<ProviderId> {
+        // Explicit provider ids (used in persisted jobs) resolve directly.
+        let key = Self::canonical_key(value);
+        match key.as_str() {
+            "kfintech-fixture" => return Some(ProviderId::KfintechFixture),
+            "kfintech-live" => return Some(ProviderId::KfintechLive),
+            "bigshare-live" => return Some(ProviderId::BigshareLive),
+            "mufg-intime-live" => return Some(ProviderId::MufgIntimeLive),
+            _ => {}
+        }
+        Self::descriptor_for_key(&key).map(|d| d.provider_id)
+    }
+
+    /// Resolve only explicit registrar ids/aliases. Product routing never uses
+    /// company-name substring guesses. Same canonical table as `resolve`.
+    pub fn resolve_registrar(value: &str) -> Option<ProviderDescriptor> {
+        Self::descriptor_for_key(&Self::canonical_key(value))
     }
 }

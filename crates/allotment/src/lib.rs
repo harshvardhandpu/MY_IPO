@@ -5,6 +5,7 @@
 //! application service — never via LLM/agent context.
 
 mod bigshare;
+mod http;
 mod job;
 mod kfintech;
 mod kfintech_live;
