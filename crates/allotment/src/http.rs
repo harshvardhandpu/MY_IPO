@@ -284,4 +284,13 @@ mod tests {
         // Empty string cannot parse as a URI with a host.
         assert!(url_host("").is_none());
     }
+
+    #[test]
+    fn rustls_https_transport_is_enabled() {
+        // A missing ureq TLS feature panics before transport. With rustls
+        // enabled this reaches the local socket and returns a normal error.
+        let result = std::panic::catch_unwind(|| ureq::get("https://127.0.0.1:9").call());
+        assert!(result.is_ok(), "HTTPS transport must not panic");
+        assert!(result.unwrap().is_err());
+    }
 }
