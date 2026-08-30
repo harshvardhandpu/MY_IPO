@@ -23,7 +23,9 @@ pub use job::{
 };
 pub use kfintech::{KfintechIssue, KfintechProvider};
 pub use kfintech_live::{DiscoveredIssue, LiveKfintechProvider};
-pub use mufg_intime::{MufgCaptchaState, MufgEphemeralSession, MufgIntimeProvider, MufgIssue};
+pub use mufg_intime::{
+    MufgCaptchaState, MufgEphemeralSession, MufgIntimeProvider, MufgIssue, MufgPublicPrecheck,
+};
 pub use profit::{EstimatedProfit, ProfitPriceBasis};
 pub use provider::{
     AllotmentLookupContext, AllotmentProvider, BackgroundExecution, FixtureKfintechProvider,
@@ -39,9 +41,10 @@ pub use runtime::{JobLease, ProviderRateLimiter, ProviderRatePolicy};
 pub use status::NormalizedAllotmentStatus;
 
 /// Build readiness and investor-data authorization are separate security gates.
-pub const LIVE_ADAPTER_IMPLEMENTED: bool = false;
+pub const LIVE_TRANSPORT_IMPLEMENTED: bool = true;
+pub const LIVE_ADAPTER_IMPLEMENTED: bool = LIVE_TRANSPORT_IMPLEMENTED;
 pub const REAL_INVESTOR_LOOKUP_AUTHORIZED: bool = false;
 
 pub const fn real_investor_lookup_allowed() -> bool {
-    LIVE_ADAPTER_IMPLEMENTED && REAL_INVESTOR_LOOKUP_AUTHORIZED
+    LIVE_TRANSPORT_IMPLEMENTED && REAL_INVESTOR_LOOKUP_AUTHORIZED
 }

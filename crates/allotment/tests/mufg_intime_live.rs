@@ -30,7 +30,16 @@ fn lookup_context() -> AllotmentLookupContext {
 fn parse_case(name: &str) -> String {
     let cases: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/mufg/cases.json")).unwrap();
-    serde_json::to_string(&cases[name]).unwrap()
+    cases[name]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| serde_json::to_string(&cases[name]).unwrap())
+}
+
+fn captcha_case(name: &str) -> String {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/mufg/captcha_current.json")).unwrap();
+    cases[name].as_str().unwrap().to_owned()
 }
 
 fn parse_result(
@@ -62,6 +71,12 @@ fn fixtures_are_verified_by_provenance() {
         .expect("valid case provenance")
         .verify_content(cases.as_bytes())
         .expect("case fixture hash");
+    SanitizedFixtureProvenance::from_json(include_str!(
+        "fixtures/mufg/captcha_current.json.provenance.json"
+    ))
+    .expect("valid current captcha provenance")
+    .verify_content(include_bytes!("fixtures/mufg/captcha_current.json"))
+    .expect("current captcha fixture hash");
 }
 
 #[test]
@@ -262,6 +277,62 @@ fn malformed_captcha_container_is_unknown() {
     );
 }
 
+#[test]
+fn current_live_nested_captcha_wrapper_is_dormant() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(&captcha_case("current_live_dormant")).expect("state"),
+        MufgCaptchaState::Dormant
+    );
+}
+
+#[test]
+fn current_nested_wrapper_is_required_when_explicitly_visible() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(&captcha_case("synthetic_required_same_wrapper"))
+            .expect("state"),
+        MufgCaptchaState::Required
+    );
+}
+
+#[test]
+fn current_wrapper_without_div_visibility_evidence_is_unknown() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(&captcha_case("ambiguous_wrapper")).expect("state"),
+        MufgCaptchaState::Unknown
+    );
+}
+
+#[test]
+fn unrelated_hidden_element_does_not_hide_visible_current_wrapper() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(&captcha_case("unrelated_hidden_element"))
+            .expect("state"),
+        MufgCaptchaState::Required
+    );
+}
+
+#[test]
+fn current_wrapper_attributes_are_ascii_case_and_space_insensitive() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(&captcha_case("mixed_case_dormant")).expect("state"),
+        MufgCaptchaState::Dormant
+    );
+}
+
+#[test]
+fn unrecognized_current_captcha_structure_stays_unknown() {
+    use sanket_allotment::MufgCaptchaState;
+    assert_eq!(
+        MufgIntimeProvider::captcha_state(&captcha_case("structural_drift")).expect("state"),
+        MufgCaptchaState::Unknown
+    );
+}
+
 // ---------------------------------------------------------------
 // Request construction (synthetic only)
 // ---------------------------------------------------------------
@@ -285,23 +356,70 @@ fn request_construction_carries_token_session_and_redaction() {
         "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/SearchOnPan"
     );
     assert_eq!(request.method, "POST");
-    assert_eq!(request.content_type, "application/json");
+    assert_eq!(request.content_type, "application/json; charset=utf-8");
+    assert!(request.headers.iter().any(|h| h == "Cookie: [REDACTED]"));
     assert!(
         request
             .headers
             .iter()
-            .any(|h| h.starts_with("__RequestVerificationToken: "))
+            .any(|h| h == "Content-Type: application/json; charset=utf-8")
     );
-    assert!(
-        request
-            .headers
-            .iter()
-            .any(|h| h == "Content-Type: application/json")
-    );
-    // Synthetic PAN never appears in the request body or debug output.
-    assert!(request.body.contains("[SYNTHETIC_LOOKUP]"));
+    let body: serde_json::Value = serde_json::from_str(&request.body).expect("JSON request");
+    assert_eq!(body["clientid"], "11926");
+    assert_eq!(body["PAN"], "[SYNTHETIC_LOOKUP]");
+    assert_eq!(body["IFSC"], "");
+    assert_eq!(body["CHKVAL"], "1");
+    assert_eq!(body["token"], "token-synthetic");
+    assert_eq!(body.as_object().expect("object").len(), 5);
     assert!(!request.debug().contains("cookie-synthetic"));
-    assert!(!request.debug().contains("PAN=ABCDE"));
+    assert!(!request.debug().contains("token-synthetic"));
+}
+
+#[test]
+fn current_json_token_contract_is_parsed_and_encrypted() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/mufg/session.json")).unwrap();
+    let parsed_token = MufgIntimeProvider::parse_generated_token(
+        &serde_json::to_string(&cases["token_current_json"]).unwrap(),
+    )
+    .expect("current token");
+    assert_eq!(parsed_token, "123456789");
+    assert_eq!(
+        MufgIntimeProvider::encrypt_request_token(&parsed_token).expect("encrypted token"),
+        "tmcrlyWVgO/ANL4vgSjBPA=="
+    );
+}
+
+#[test]
+#[ignore = "identifier-free live MUFG contract precheck"]
+fn live_public_precheck_issue_11926_without_investor_identifier() {
+    use sanket_allotment::MufgCaptchaState;
+
+    let precheck = MufgIntimeProvider::new()
+        .identifier_free_precheck("11926", "Symbiotec Pharmalab Limited")
+        .expect("public precheck");
+    assert_eq!(precheck.issue.provider_issue_id, "11926");
+    assert_eq!(
+        precheck.issue.display_name,
+        "Symbiotec Pharmalab Limited - IPO"
+    );
+    assert!(matches!(
+        precheck.captcha_state,
+        MufgCaptchaState::Absent | MufgCaptchaState::Dormant
+    ));
+    assert!(precheck.tls_http_healthy);
+    assert!(precheck.session_bootstrap_succeeded);
+    assert!(precheck.request_token_obtained);
+    assert_eq!(
+        precheck.lookup_endpoint,
+        "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/SearchOnPan"
+    );
+    println!("MUFG_CONTRACT=PASS");
+    println!("ISSUE_11926=AVAILABLE");
+    println!("CAPTCHA={:?}", precheck.captcha_state);
+    println!("SESSION_BOOTSTRAP=PASS");
+    println!("REQUEST_TOKEN=PASS");
+    println!("REAL_PAN_LOOKUP=NOT_EXECUTED");
 }
 
 #[test]
@@ -449,6 +567,14 @@ fn unattended_check_fails_closed_pending_transport() {
     let status = err.to_status();
     assert_ne!(status, NormalizedAllotmentStatus::Allotted);
     assert_ne!(status, NormalizedAllotmentStatus::NotAllotted);
+}
+
+#[test]
+#[allow(clippy::assertions_on_constants)]
+fn implemented_transport_does_not_authorize_real_lookup() {
+    assert!(sanket_allotment::LIVE_TRANSPORT_IMPLEMENTED);
+    assert!(!sanket_allotment::REAL_INVESTOR_LOOKUP_AUTHORIZED);
+    assert!(!sanket_allotment::real_investor_lookup_allowed());
 }
 
 #[test]

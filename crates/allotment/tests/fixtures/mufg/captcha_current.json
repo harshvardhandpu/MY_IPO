@@ -1,0 +1,8 @@
+{
+  "current_live_dormant": "<div class=\"row\"><div class=\"input-section paddingcnd\" style=\"display:none;\"><div class=\"six columns six-m\" style=\"\"><input id=\"txtCaptch\" type=\"text\" maxlength=\"4\" class=\"input-text_new search-input_new\" value=\"Enter Captcha\" style=\"\" /></div><div class=\"three columns four-m\" style=\"\"><img id=\"img_cap\" src=\"CImage.aspx\" /></div><div class=\"three columns two-m\" style=\"padding-left: 18px;\"><input type=\"image\" id=\"btnrefersh\" src=\"images/captcha_refresh.png\" /></div></div></div><script>function refreshCaptcha(){document.querySelector('#txtCaptch');document.querySelector('#img_cap').src='CImage.aspx';}</script>",
+  "synthetic_required_same_wrapper": "<div class=\"row\"><div class=\"input-section paddingcnd\" style=\"display:block;\"><div class=\"six columns six-m\"><input id=\"txtCaptch\" type=\"text\" /></div><div class=\"three columns four-m\"><img id=\"img_cap\" src=\"CImage.aspx\" /></div></div></div>",
+  "ambiguous_wrapper": "<div class=\"row\"><section class=\"input-section paddingcnd\"><div><input id=\"txtCaptch\" type=\"text\" /></div><div><img id=\"img_cap\" src=\"CImage.aspx\" /></div></section></div>",
+  "unrelated_hidden_element": "<div id=\"unrelated\" style=\"display:none;\">other</div><div class=\"input-section paddingcnd\" style=\"display:block;\"><div><img id=\"img_cap\" src=\"CImage.aspx\" /></div></div>",
+  "mixed_case_dormant": "<DIV CLASS=\"INPUT-SECTION PADDINGCND\" STYLE=\" DISPLAY : NONE ; \"><DIV><INPUT ID=\"TXTCAPTCH\" /></DIV><DIV><IMG ID=\"IMG_CAP\" SRC=\"cimage.aspx\" /></DIV></DIV>",
+  "structural_drift": "<template data-provider-challenge=\"captcha\"><img data-source=\"CImage.aspx\" /></template>"
+}

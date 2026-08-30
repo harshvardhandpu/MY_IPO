@@ -1,0 +1,9 @@
+{
+  "provider": "mufg-intime-live",
+  "source_url": "https://in.mpms.mufg.com/Initial_Offer/public-issues.html",
+  "retrieved_at": "2026-08-30T10:56:17Z",
+  "fixture_type": "PUBLIC_CAPTCHA_CONTRACT_CASES",
+  "sanitized": true,
+  "content_sha256": "dfa3e3ff78e6ca03ba9b654196cc004be68b0519364d6bc2e855be9fa6c5d982",
+  "structural_fingerprint": "mufg-captcha-nested-wrapper-v2"
+}

@@ -17,6 +17,9 @@
   "token_duplicate": {
     "d": "<html><body><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN_A]\" /><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN_B]\" /></body></html>"
   },
+  "token_current_json": {
+    "d": "123456789"
+  },
   "captcha_dormant_page": {
     "d": "<html><body><div id=\"captchaDiv\" style=\"display:none\"><img id=\"CImage\" src=\"Captcha.aspx\" /></div><input type=\"hidden\" id=\"hidToken\" value=\"[SYNTHETIC_TOKEN]\" /></body></html>"
   },

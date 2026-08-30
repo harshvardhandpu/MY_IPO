@@ -3,14 +3,13 @@
 //! Policy (fail-closed):
 //! - native Rust `ureq` + rustls TLS verification; NO curl / shell-out fallback
 //! - host allowlist: request refused unless URL host is on the list
-//! - redirects: capped; every hop must stay on the allowlist (checked via
-//!   final-uri after ureq follows redirects; off-allowlist hops error out)
+//! - redirects: capped; sensitive session transports use a zero-redirect agent
 //! - bounded response: caller byte cap enforced while reading
 //! - timeouts: global + connect
 //! - explicit UA; content-type sanity check (text-ish only)
 //! - sanitized errors: host visible, no URL query/body/headers embedded
 //! - no logging of request or response bodies; body returned only to caller
-//! - GET-only surface
+//! - GET plus JSON POST; no shell/process surface
 
 use std::io::Read;
 use std::sync::OnceLock;
@@ -99,6 +98,22 @@ impl SharedHttpClient {
         })
     }
 
+    /// Fresh cookie-isolated agent for sensitive registrar sessions. Redirects
+    /// are disabled so a POST body can never cross the exact-host allowlist.
+    pub fn isolated_no_redirects() -> Self {
+        ureq::config::Config::builder()
+            .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
+            .timeout_connect(Some(Duration::from_secs(TIMEOUT_SECS)))
+            .max_redirects(0)
+            .max_redirects_will_error(true)
+            .redirect_auth_headers(ureq::config::RedirectAuthHeaders::Never)
+            .http_status_as_error(true)
+            .user_agent(USER_AGENT)
+            .build()
+            .new_agent()
+            .into()
+    }
+
     /// Fail-closed GET. `allowlist` holds the exact permitted hosts for this
     /// registrar (e.g. `["ipostatus.kfintech.com"]`). Redirects are followed
     /// by the agent (capped); the final URI must remain on the allowlist.
@@ -109,32 +124,12 @@ impl SharedHttpClient {
         max_bytes: u64,
         timeout_override: u64,
     ) -> Result<String, HttpPolicyError> {
-        // Policy validation first (fail-closed before spending rate budget),
-        // then the local backstop.
-        if !url.starts_with("https://") {
-            return Err(HttpPolicyError::InvalidUrl);
-        }
-        let host = url_host(url).ok_or(HttpPolicyError::InvalidUrl)?;
-        if !allowlist.contains(&host.as_str()) {
-            return Err(HttpPolicyError::HostNotAllowed { host });
-        }
-
-        {
-            let mut last = self
-                .last_call
-                .lock()
-                .map_err(|_| HttpPolicyError::Transport("policy lock poisoned".into()))?;
-            if let Some(prev) = *last {
-                if prev.elapsed() < self.min_interval {
-                    return Err(HttpPolicyError::RateLimited);
-                }
-            }
-            *last = Some(std::time::Instant::now());
-        }
+        let host = self.begin_request(url, allowlist)?;
 
         let response = self
             .agent
             .get(url)
+            .header("Connection", "close")
             .config()
             .timeout_global(Some(Duration::from_secs(timeout_override)))
             .build()
@@ -157,6 +152,72 @@ impl SharedHttpClient {
         }
 
         read_body(response, max_bytes)
+    }
+
+    pub fn post_json(
+        &self,
+        url: &str,
+        allowlist: &[&str],
+        body: &str,
+        max_bytes: u64,
+        timeout_override: u64,
+    ) -> Result<String, HttpPolicyError> {
+        let host = self.begin_request(url, allowlist)?;
+        let response = self
+            .agent
+            .post(url)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json; charset=utf-8")
+            .header("Connection", "close")
+            .header("Content-Length", body.len().to_string())
+            .config()
+            .timeout_global(Some(Duration::from_secs(timeout_override)))
+            .build()
+            .send(body.as_bytes());
+        let response = match response {
+            Ok(response) => response,
+            Err(ureq::Error::StatusCode(code)) => return Err(HttpPolicyError::Status(code)),
+            Err(ureq::Error::TooManyRedirects) => return Err(HttpPolicyError::TooManyRedirects),
+            Err(ureq::Error::RedirectFailed) => {
+                return Err(HttpPolicyError::RedirectNotAllowed { host });
+            }
+            Err(error) => {
+                return Err(HttpPolicyError::Transport(sanitize_transport(&error)));
+            }
+        };
+        let final_host = response.get_uri().host().unwrap_or_default().to_string();
+        if !allowlist.contains(&final_host.as_str()) {
+            return Err(HttpPolicyError::RedirectNotAllowed { host: final_host });
+        }
+        read_body(response, max_bytes)
+    }
+
+    pub fn has_cookie(&self, domain: &str, path: &str, name: &str) -> bool {
+        self.agent
+            .cookie_jar_lock()
+            .get(domain, path, name)
+            .is_some()
+    }
+
+    fn begin_request(&self, url: &str, allowlist: &[&str]) -> Result<String, HttpPolicyError> {
+        if !url.starts_with("https://") {
+            return Err(HttpPolicyError::InvalidUrl);
+        }
+        let host = url_host(url).ok_or(HttpPolicyError::InvalidUrl)?;
+        if !allowlist.contains(&host.as_str()) {
+            return Err(HttpPolicyError::HostNotAllowed { host });
+        }
+        let mut last = self
+            .last_call
+            .lock()
+            .map_err(|_| HttpPolicyError::Transport("policy lock poisoned".into()))?;
+        if let Some(previous) = *last {
+            if previous.elapsed() < self.min_interval {
+                return Err(HttpPolicyError::RateLimited);
+            }
+        }
+        *last = Some(std::time::Instant::now());
+        Ok(host)
     }
 }
 
@@ -292,5 +353,32 @@ mod tests {
         let result = std::panic::catch_unwind(|| ureq::get("https://127.0.0.1:9").call());
         assert!(result.is_ok(), "HTTPS transport must not panic");
         assert!(result.unwrap().is_err());
+    }
+
+    #[test]
+    fn sensitive_post_sessions_are_cookie_isolated_and_fail_closed() {
+        let first = SharedHttpClient::isolated_no_redirects();
+        let second = SharedHttpClient::isolated_no_redirects();
+        let uri = Uri::from_static("https://in.mpms.mufg.com/");
+        first
+            .agent
+            .cookie_jar_lock()
+            .insert(
+                ureq::Cookie::parse("session=synthetic", &uri).expect("cookie"),
+                &uri,
+            )
+            .expect("insert");
+        assert!(first.has_cookie("in.mpms.mufg.com", "/", "session"));
+        assert!(!second.has_cookie("in.mpms.mufg.com", "/", "session"));
+        assert!(matches!(
+            first.post_json(
+                "https://evil.example.com/submit",
+                &["in.mpms.mufg.com"],
+                "{}",
+                1024,
+                TIMEOUT_SECS,
+            ),
+            Err(HttpPolicyError::HostNotAllowed { .. })
+        ));
     }
 }

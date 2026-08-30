@@ -22,7 +22,7 @@
 - **Gate 4E independent review:** PASS — gpt-oss-120b via generalcompute (free), 2026-08-29; zero blocking findings
 - **Gate 4F final system review:** **COMPLETE** — PASS WITH NON-BLOCKING FINDINGS (`moonshotai/kimi-k3` via NVIDIA NIM, free, 2026-08-29); pilot readiness YES — WITH NON-BLOCKING CONDITIONS (five pre-pilot conditions; real PAN still blocked)
 - **Gate 4F Condition A TLS amendment:** **CLOSED** (`6b8ff6a`) — full gates PASS and independent focused review PASS (`gpt-oss-120b` via generalcompute)
-- **Controlled pilot preparation:** **FAIL — STOP PILOT** — Symbiotec Pharmalab Limited maps to MUFG issue `11926`, but current CAPTCHA structure is `Unknown` and MUFG real-investor transport remains unavailable
+- **Controlled pilot preparation:** **READY PENDING EXPLICIT OWNER AUTHORIZATION** — MUFG issue `11926` is available; current CAPTCHA is `Dormant`; guarded transport and all review gates pass; no real lookup executed
 - **Date:** 2026-08-30
 
 ## Model routing (binding)
@@ -41,9 +41,9 @@ Independent-reviewer selection rules for this repo: model must be (1) free — z
 | Production mode + in-memory/mock provider | Rejected fail-closed |
 | Fixture provider in production | Rejected |
 | Live provider in development | Rejected |
-| Real investor lookup | **Blocked — MUFG provider precheck failed before authorization** |
+| Real investor lookup | **Not authorized — transport ready, explicit owner YES required** |
 | Linux Secret Service synthetic-key write/read/delete smoke | PASS |
-| Real PAN or live registrar request used in verification | **No** |
+| Real PAN or investor-result request used in verification | **No** |
 
 Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` closures. It is rejected from free-form allotment/profit provenance and never represented in events, SQLite projections, report DTOs, logs, AI payloads, or filenames.
 
@@ -71,7 +71,7 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - `docs/plans/multi-registrar-allotment/02-live-validation.md` records the current cross-provider capability matrix and Gate 2 verdict.
 - KFintech: public page/API contract and 64 issue records observed; no CAPTCHA; existing adapter needs a major isolated update.
 - Bigshare: three public servers available at final check; server-verified CAPTCHA requires human continuation; one transient Server 2 HTTP 503 and live page drift observed.
-- MUFG Intime: current public discovery exposes Symbiotec Pharmalab Limited as issue `11926`; bootstrap/token endpoints respond, but the current page classifies as CAPTCHA `Unknown` under the fail-closed parser. Gate 4D fixture-backed session/token adapter remains independently approved; real investor transport is not implemented/allowed and the pilot is stopped.
+- MUFG Intime: current public discovery exposes Symbiotec Pharmalab Limited as issue `11926`; the current CAPTCHA wrapper is positively hidden and classifies `Dormant`; identifier-free page/discovery/token bootstrap passes. Guarded real-investor transport is implemented, but authorization remains independently false.
 - Registrar details: `docs/research/registrars/KFINTECH.md`, `BIGSHARE.md`, and `MUFG_INTIME.md`.
 
 ### Gate 3 provider design
@@ -95,31 +95,33 @@ Plaintext PAN remains confined to audited `with_pan(..., AllotmentCheck, ...)` c
 - Durable challenge projection stores safe metadata and an opaque continuation reference only; provider cookies, request tokens, challenge material, answers, and response bodies remain ephemeral.
 - Startup reconciliation preserves jobs, clears stale leases/references, expires continuations, and moves work to `PREPARING_PROVIDER_SESSION` or `VERIFICATION_REQUIRED_REFRESH`.
 - Sanitized fixture provenance validates provider/source/retrieval/type/SHA-256/fingerprint metadata.
-- `LIVE_ADAPTER_IMPLEMENTED` and `REAL_INVESTOR_LOOKUP_AUTHORIZED` remain separate; the latter is fail-closed false.
+- `LIVE_TRANSPORT_IMPLEMENTED` and `REAL_INVESTOR_LOOKUP_AUTHORIZED` remain separate; the latter is fail-closed false.
 - Manual negative reports remain `MANUAL_RESULT`, never provider-confirmed `NOT_ALLOTTED`.
 - Review: `docs/reviews/GATE_4A_INDEPENDENT_REVIEW.md` — PASS.
 
-### Gate 4D MUFG session/token adapter
+### Gate 4D MUFG adapter plus pilot-blocker remediation
 
 - Identifier-free issue discovery parses only verified JSON-wrapped MUFG XML structure.
-- Session cookie and exactly one non-empty `hidToken` remain ephemeral; lookup-request debug output is redacted and the request type is not serde-serializable.
-- CAPTCHA detection is marker/container-scoped: visible is `Required`, explicit hidden is `Dormant`, and malformed/ambiguous markup is `Unknown`.
+- Session cookie and JSON-delivered request token remain ephemeral; lookup-request debug output is redacted and request payloads are not persisted.
+- CAPTCHA detection walks the bounded marker ancestor chain: visible is `Required`, positive hidden evidence is `Dormant`, and malformed/ambiguous markup is `Unknown`.
+- Native rustls transport uses exact-host allowlisting, no redirects, bounded bodies/timeouts, isolated cookies, browser-compatible AES token encryption, and an independent authorization gate before `SearchOnPan`.
 - Positive and negative financial results remain reachable only through their guarded proof constructors; unknown/drifted/provider failures remain operational.
 - Implementation `db5be5d`; correction `82971e0`; independent correction re-review PASS.
 - Review: `docs/reviews/GATE_4D_INDEPENDENT_REVIEW.md`.
 
 ## Verification
 
-- `cargo fmt --all -- --check` — PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
-- `cargo test --workspace` — PASS
-- `npm run check` on host Node 26 — PASS (151-file secret scan, formatting, TypeScript, 4 Vitest, 4 Python tests)
+- `cargo fmt --all -- --check` — PASS (remediation)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS (remediation)
+- `cargo test --workspace` — PASS (remediation; identifier-free live precheck intentionally ignored in normal runs)
+- `npm run check` on host Node 26 — PASS (161-file secret scan, formatting, TypeScript, 5 Vitest, 4 Python tests)
 - `npm run build` — PASS
-- Gate 4D focused MUFG suite — PASS (40/40)
-- Gate 4D fixture SHA-256 provenance and PAN/allotment invariants — PASS
+- MUFG focused suite — PASS (48 passed; identifier-free live precheck intentionally ignored)
+- MUFG fixture SHA-256 provenance and PAN/allotment invariants — PASS
 - Linux Secret Service generated-key write/read/delete smoke — PASS
 - ProductionSecure application status (`os-keyring`, no blocker) and production rejection of the in-memory/dev provider — PASS
-- Identifier-free MUFG issue/session precheck — issue `11926` available; CAPTCHA classification `Unknown`; **STOP PILOT**
+- Identifier-free MUFG precheck — PASS; issue `11926` available; CAPTCHA `Dormant`; session/token bootstrap PASS; real PAN lookup NOT EXECUTED
+- MUFG remediation independent review — PASS, approve=true, zero findings; `gpt-oss-120b` via generalcompute (free), served model confirmed
 - Tauri debug executable, `.deb`, and `.rpm` artifacts produced (bridge response timed out after 300 seconds, artifacts verified afterward)
 - Independent review — PASS; see `docs/reviews/PHASE_3B_INDEPENDENT_REVIEW.md`
 
@@ -137,7 +139,7 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 Gate 4F pre-pilot conditions A–E are **CLOSED** (`75af0ce` plus Condition A runtime amendment `6b8ff6a`) and independently verified **PASS**. Full verification is green (fmt, clippy `-D warnings`, workspace tests, npm check/build, 157-file secrets scan, diff check). The amendment corrects the original internal ureq `_tls` selection to the public `rustls` feature and adds a local HTTPS no-panic regression.
 
-Exact IPO resolution is complete: **Symbiotec Pharmalab Limited** → **MUFG Intime India Private Limited** → issue id **`11926`** → official MUFG Initial Offer service. The issue remains publicly exposed. Secure identity mode and Linux Secret Service runtime smoke pass. However, the provider precheck fails closed because the current page classifies as CAPTCHA `Unknown`, and the MUFG adapter still disallows real investor transport. Remediate and independently review those blockers before asking for final owner authorization. Real PAN remains blocked and was not accessed. See `docs/security/CONTROLLED_REAL_PAN_PILOT.md`.
+Exact IPO resolution is complete: **Symbiotec Pharmalab Limited** → **MUFG Intime India Private Limited** → issue id **`11926`** → official MUFG Initial Offer service. The identifier-free live precheck passes with CAPTCHA `Dormant`, isolated session/token bootstrap, and no investor-result request. Guarded transport, full verification, secret scanning, and independent free-model review pass. Real lookup remains unauthorized until a separate explicit owner YES; no PAN was accessed. See `docs/security/CONTROLLED_REAL_PAN_PILOT.md` and `docs/reviews/MUFG_PILOT_BLOCKER_REMEDIATION_INDEPENDENT_REVIEW.md`.
 
 ## Gate 4E implemented
 

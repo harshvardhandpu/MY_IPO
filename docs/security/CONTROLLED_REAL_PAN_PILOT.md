@@ -9,18 +9,18 @@
 
 | Item | Result |
 |---|---|
-| PRE-PILOT HARDENING | **FAIL — STOP PILOT** |
+| PRE-PILOT HARDENING | **PASS — REMEDIATION REVIEWED** |
 | KNOWN APPLICATION | **CONFIRMED BY OWNER** |
 | EXPECTED RESULT | **ALLOTTED** |
 | PROVIDER | **MUFG Intime India Private Limited** (formerly Link Intime India Private Limited) |
 | ISSUE AVAILABLE | **YES** |
 | SECURE KEYRING | **PASS** |
-| REAL-PAN EXECUTION | **BLOCKED — do not request final authorization yet** |
+| REAL-PAN EXECUTION | **NOT AUTHORIZED — explicit owner YES still required** |
 
-The public issue is available, but the current MUFG page classifies as CAPTCHA
-`Unknown` under Sanket's tested fail-closed parser, and the provider capability
-still reports that real investor lookup is not implemented/allowed. These are
-hard blockers independent of owner authorization.
+The public-contract and transport blockers are closed. The current CAPTCHA
+wrapper is classified `Dormant` only from positive hidden-ancestor evidence;
+ambiguous structures still fail closed as `Unknown`. Live transport is
+implemented, but real investor lookup remains independently unauthorized.
 
 ## Exact issue mapping
 
@@ -44,7 +44,7 @@ hard blockers independent of owner authorization.
 
 ## Provider precheck — no PAN
 
-Performed 2026-08-30 against the official MUFG service.
+Repeated 2026-08-30T17:04:52Z against the official MUFG service.
 
 | Check | Result |
 |---|---|
@@ -55,14 +55,14 @@ Performed 2026-08-30 against the official MUFG service.
 | Search contract marker | `SearchOnPan` present |
 | OTP marker | Not observed |
 | CAPTCHA markup | Present |
-| Sanket CAPTCHA classification | **`Unknown` — FAIL CLOSED** |
-| Provider runtime capability | **Real investor lookup not implemented/allowed** |
-| Provider health | **UNACCEPTABLE FOR PILOT** |
+| Sanket CAPTCHA classification | **`Dormant` — positive hidden-wrapper evidence** |
+| Provider runtime capability | **Transport implemented; real lookup authorization remains false** |
+| Provider health | **ACCEPTABLE FOR A SEPARATELY AUTHORIZED ONE-shot pilot** |
 
-An HTTP 200 is not treated as provider health. The `Unknown` CAPTCHA state is
-contract drift relative to the previously tested dormant shape. Per pilot
-policy, the request must stop rather than infer visibility or bypass the
-challenge.
+An HTTP 200 alone is not treated as provider health. The precheck verified the
+current structure, exact issue, isolated session cookie, JSON token contract,
+and dormant CAPTCHA evidence. No investor identifier or result request was
+used. A visible or ambiguous challenge still stops the flow.
 
 ## Security preflight
 
@@ -99,18 +99,18 @@ verification passed, and the owner-locked independent reviewer
 `gpt-oss-120b` via generalcompute returned PASS with no blockers. See
 `docs/reviews/GATE_4F_TLS_AMENDMENT_INDEPENDENT_REVIEW.md`.
 
-## Exact execution checklist — not authorized, not executable yet
+## Exact execution checklist — remediation complete; execution not authorized
 
 ### Blocker-remediation gate
 
-- [ ] Capture the current public MUFG structure without investor identifiers.
-- [ ] Explain why the tested parser returns CAPTCHA `Unknown`.
-- [ ] Update the provider contract only from observed, sanitized evidence; do not guess visibility.
-- [ ] Preserve legitimate CAPTCHA as `NEEDS_HUMAN_VERIFICATION`; no bypass.
-- [ ] Implement and test the MUFG live investor transport behind the existing authorization gate.
-- [ ] Repeat identifier-free issue/session/CAPTCHA/OTP precheck.
-- [ ] Require acceptable provider health and exact issue id `11926`.
-- [ ] Run full security, cargo, npm, secrets, and independent-review gates.
+- [x] Capture the current public MUFG structure without investor identifiers.
+- [x] Explain why the tested parser returned CAPTCHA `Unknown`.
+- [x] Update the provider contract only from observed, sanitized evidence; do not guess visibility.
+- [x] Preserve legitimate CAPTCHA as `NEEDS_HUMAN_VERIFICATION`; no bypass.
+- [x] Implement and test the MUFG live investor transport behind the existing authorization gate.
+- [x] Repeat identifier-free issue/session/CAPTCHA precheck.
+- [x] Require acceptable provider health and exact issue id `11926`.
+- [x] Run full security, cargo, npm, secrets, and independent-review gates.
 
 ### Owner/runtime gate after all blockers are closed
 
@@ -126,6 +126,6 @@ verification passed, and the owner-locked independent reviewer
 
 ## Stop conditions
 
-Do not request owner authorization and do not access PAN while either blocker
-remains. Do not reinterpret `Unknown`, `NotFound`, `ProviderUnavailable`, or
+Do not access PAN or call the result endpoint without a separate explicit owner
+YES. Do not reinterpret `Unknown`, `NotFound`, `ProviderUnavailable`, or
 `NeedsHumanVerification` as a financial result. Do not bypass CAPTCHA or OTP.

@@ -6,19 +6,24 @@
 //! CAPTCHA (markup present but dormant during research), and a JSON-wrapped
 //! XML result contract. No real investor lookup was submitted.
 //!
-//! The unattended `check_allotment` path fails closed until the live
-//! session/token transport slice wires it: token failures, session expiry,
-//! and CAPTCHA activation map to operational states — never a guessed
+//! The live transport is implemented but separately authorization-gated:
+//! token failures, session expiry, and CAPTCHA activation map to operational
+//! states — never a guessed
 //! financial result. `MufgEphemeralSession` holds cookie/token values only
 //! in memory with a redacted `Debug` impl; they are never serialized,
 //! logged, or persisted. The parser reads only `company_id`/`companyname`
 //! (discovery) and `ALLOT`/`SHARES` (results); member fields (PEMNDG,
 //! NAME1) are required for structure but never copied.
 
+use aes::Aes128;
+use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use sanket_identity_security::Pan;
 
+use crate::http::{HttpPolicyError, SharedHttpClient, TIMEOUT_SECS};
 use crate::provider::{
     AllotmentLookupContext, AllotmentProvider, BackgroundExecution, HumanVerificationRequirement,
     IssueDiscoveryMode, LookupKeyKind, NegativeResultProof, PositiveResultProof,
@@ -27,7 +32,13 @@ use crate::provider::{
 };
 
 const DISCOVERY_URL: &str = "https://in.mpms.mufg.com/Initial_Offer/public-issues.html";
+const ISSUES_URL: &str = "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/GetDetails";
+const TOKEN_URL: &str = "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/generateToken";
 const LOOKUP_URL: &str = "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/SearchOnPan";
+const ALLOWED_HOSTS: &[&str] = &["in.mpms.mufg.com"];
+const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+const TOKEN_KEY: &[u8; 16] = b"0123456789abcdef";
+const TOKEN_IV: &[u8; 16] = b"abcdef9876543210";
 const ISSUE_FINGERPRINT: &str = "mufg-issues-companyid-xml-v1";
 const RESULT_FINGERPRINT: &str = "mufg-result-d-xml-table-v1";
 
@@ -48,6 +59,17 @@ pub struct MufgIssue {
     pub discovered_at: String,
     pub source_url: String,
     pub structural_fingerprint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MufgPublicPrecheck {
+    pub issue: MufgIssue,
+    pub captcha_state: MufgCaptchaState,
+    pub tls_http_healthy: bool,
+    pub session_bootstrap_succeeded: bool,
+    pub request_token_obtained: bool,
+    pub lookup_endpoint: &'static str,
+    pub observed_at: String,
 }
 
 /// Ephemeral, provider-private session state. Values live only in memory.
@@ -108,15 +130,28 @@ impl MufgEphemeralSession {
     }
 }
 
-pub struct MufgIntimeProvider;
+pub struct MufgIntimeProvider {
+    network_enabled: bool,
+}
+
+struct MufgLiveSession {
+    http: SharedHttpClient,
+    issue: MufgIssue,
+    captcha_state: MufgCaptchaState,
+    encrypted_token: Zeroizing<String>,
+}
 
 impl MufgIntimeProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            network_enabled: true,
+        }
     }
 
     pub fn offline_for_tests() -> Self {
-        Self
+        Self {
+            network_enabled: false,
+        }
     }
 
     /// Parse the JSON-wrapped XML discovery payload. Only unique, all-digit
@@ -208,6 +243,36 @@ impl MufgIntimeProvider {
         token.ok_or_else(|| ProviderError::Unknown("mufg token missing".into()))
     }
 
+    /// Current MUFG token endpoint contract: ASP.NET JSON wrapper with one
+    /// short server token in `d`. No HTML token field is involved.
+    pub fn parse_generated_token(body: &str) -> Result<String, ProviderError> {
+        let token = xml_payload(body)?;
+        if token.is_empty()
+            || token.len() > 128
+            || !token.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            return Err(ProviderError::Unknown(
+                "mufg generated token failed structural validation".into(),
+            ));
+        }
+        Ok(token)
+    }
+
+    /// Match the public page's CryptoJS AES-128-CBC/PKCS#7 token transform.
+    pub fn encrypt_request_token(token: &str) -> Result<String, ProviderError> {
+        if token.is_empty() || token.len() > 128 {
+            return Err(ProviderError::Unknown(
+                "mufg generated token failed structural validation".into(),
+            ));
+        }
+        let mut buffer = vec![0_u8; token.len() + 16];
+        buffer[..token.len()].copy_from_slice(token.as_bytes());
+        let encrypted = cbc::Encryptor::<Aes128>::new(TOKEN_KEY.into(), TOKEN_IV.into())
+            .encrypt_padded_mut::<Pkcs7>(&mut buffer, token.len())
+            .map_err(|_| ProviderError::Unknown("mufg token encryption failed".into()))?;
+        Ok(BASE64.encode(encrypted))
+    }
+
     /// Build the synthetic lookup request envelope. The body carries only
     /// synthetic placeholder values — the real PAN enters exclusively
     /// through the future transport slice via `with_pan`, never here.
@@ -229,16 +294,18 @@ impl MufgIntimeProvider {
         Ok(MufgLookupRequest {
             endpoint: LOOKUP_URL.to_owned(),
             method: "POST".to_owned(),
-            content_type: "application/json".to_owned(),
+            content_type: "application/json; charset=utf-8".to_owned(),
             headers: vec![
-                "__RequestVerificationToken: [REDACTED]".to_owned(),
-                "Content-Type: application/json".to_owned(),
+                "Cookie: [REDACTED]".to_owned(),
+                "Content-Type: application/json; charset=utf-8".to_owned(),
+                "Accept: application/json".to_owned(),
             ],
             body: serde_json::json!({
-                "companyId": issue_code,
-                "searchText": "[SYNTHETIC_LOOKUP]",
-                "searchMode": "PAN",
-                "requestToken": "[REDACTED]",
+                "clientid": issue_code,
+                "PAN": "[SYNTHETIC_LOOKUP]",
+                "IFSC": "",
+                "CHKVAL": "1",
+                "token": session.request_token.as_str(),
             })
             .to_string(),
         })
@@ -273,13 +340,16 @@ impl MufgIntimeProvider {
     /// is `Required`; no CAPTCHA references at all is `Absent`; markup
     /// present but visibility undecidable is `Unknown` (fail safe).
     pub fn captcha_state(page: &str) -> Result<MufgCaptchaState, ProviderError> {
+        let document;
+        let page = if page.trim_start().starts_with('{') {
+            document = xml_payload(page)?;
+            document.as_str()
+        } else {
+            page
+        };
         let normalized = page.to_ascii_lowercase();
-        let markers: Vec<_> = normalized
-            .match_indices("cimage")
-            .chain(normalized.match_indices("txtcaptch"))
-            .map(|(at, _)| at)
-            .collect();
-        if markers.is_empty() {
+        let evidence = captcha_element_evidence(&normalized)?;
+        if evidence.is_empty() {
             // A textual reference without the recognized container is
             // ambiguous: fail safe rather than silently Absent.
             return Ok(if normalized.contains("captch") {
@@ -289,21 +359,14 @@ impl MufgIntimeProvider {
             });
         }
 
-        let mut visible = false;
-        for marker in markers {
-            match captcha_marker_hidden(&normalized, marker) {
-                Some(false) => visible = true,
-                Some(true) => {}
-                None => return Ok(MufgCaptchaState::Unknown),
-            }
+        if evidence.contains(&CaptchaEvidence::Unknown) {
+            return Ok(MufgCaptchaState::Unknown);
         }
-        Ok(if visible {
+        Ok(if evidence.contains(&CaptchaEvidence::Visible) {
             MufgCaptchaState::Required
         } else {
             MufgCaptchaState::Dormant
         })
-        // ponytail: visibility classification covers the observed MUFG div
-        // container; upgrade to an HTML parser only if that contract changes.
     }
 
     /// Normalize a JSON-wrapped XML result body. Reads only `ALLOT`/`SHARES`
@@ -402,6 +465,214 @@ impl MufgIntimeProvider {
             )
         }
     }
+
+    /// Public, identifier-free contract/session precheck. The fresh cookie jar
+    /// and both token forms are dropped in memory before this returns.
+    pub fn identifier_free_precheck(
+        &self,
+        issue_code: &str,
+        expected_name: &str,
+    ) -> Result<MufgPublicPrecheck, ProviderError> {
+        let session = self.bootstrap_live_session(Some(issue_code), expected_name)?;
+        let observed_at = session.issue.discovered_at.clone();
+        Ok(MufgPublicPrecheck {
+            issue: session.issue,
+            captcha_state: session.captcha_state,
+            tls_http_healthy: true,
+            session_bootstrap_succeeded: true,
+            request_token_obtained: !session.encrypted_token.is_empty(),
+            lookup_endpoint: LOOKUP_URL,
+            observed_at,
+        })
+    }
+
+    fn bootstrap_live_session(
+        &self,
+        issue_code: Option<&str>,
+        expected_name: &str,
+    ) -> Result<MufgLiveSession, ProviderError> {
+        if !self.network_enabled {
+            return Err(ProviderError::Retryable(
+                "mufg network is disabled for this provider".into(),
+            ));
+        }
+        let observed_at = now_rfc3339()?;
+        let http = SharedHttpClient::isolated_no_redirects();
+        let page = http
+            .get(
+                DISCOVERY_URL,
+                ALLOWED_HOSTS,
+                MAX_RESPONSE_BYTES,
+                TIMEOUT_SECS,
+            )
+            .map_err(map_http_error)?;
+        let captcha_state = Self::captcha_state(&page)?;
+
+        wait_http_backstop();
+        let token_response = http
+            .post_json(
+                TOKEN_URL,
+                ALLOWED_HOSTS,
+                "{}",
+                MAX_RESPONSE_BYTES,
+                TIMEOUT_SECS,
+            )
+            .map_err(map_http_error)?;
+        if !http.has_cookie("in.mpms.mufg.com", "/", "ASP.NET_SessionId") {
+            return Err(ProviderError::Unknown(
+                "mufg session bootstrap did not establish the required cookie".into(),
+            ));
+        }
+        let raw_token = Zeroizing::new(Self::parse_generated_token(&token_response)?);
+        let encrypted_token = Zeroizing::new(Self::encrypt_request_token(&raw_token)?);
+
+        wait_http_backstop();
+        let issue_bundle = http
+            .post_json(
+                ISSUES_URL,
+                ALLOWED_HOSTS,
+                "{}",
+                MAX_RESPONSE_BYTES,
+                TIMEOUT_SECS,
+            )
+            .map_err(map_http_error)?;
+        let issues = Self::parse_issue_bundle(&issue_bundle, &observed_at)?;
+        let issue = resolve_issue(issues, issue_code, expected_name)?;
+
+        Ok(MufgLiveSession {
+            http,
+            issue,
+            captcha_state,
+            encrypted_token,
+        })
+    }
+
+    fn execute_live_lookup(
+        &self,
+        context: &AllotmentLookupContext,
+        pan: &Pan,
+    ) -> Result<ProviderAllotmentResult, ProviderError> {
+        let session = self
+            .bootstrap_live_session(context.issue.issue_code.as_deref(), &context.issue.ipo_name)?;
+        match session.captcha_state {
+            MufgCaptchaState::Absent | MufgCaptchaState::Dormant => {}
+            MufgCaptchaState::Required => {
+                return Err(ProviderError::NeedsHuman(
+                    "mufg requires owner-completed human verification".into(),
+                ));
+            }
+            MufgCaptchaState::Unknown => {
+                return Err(ProviderError::Unknown(
+                    "mufg captcha state is ambiguous".into(),
+                ));
+            }
+        }
+
+        let payload = LiveLookupPayload {
+            client_id: &session.issue.provider_issue_id,
+            lookup: pan.as_normalized(),
+            ifsc: "",
+            check_value: "1",
+            token: &session.encrypted_token,
+        };
+        let body = Zeroizing::new(
+            serde_json::to_string(&payload)
+                .map_err(|_| ProviderError::Unknown("mufg request encoding failed".into()))?,
+        );
+        wait_http_backstop();
+        let response = session
+            .http
+            .post_json(
+                LOOKUP_URL,
+                ALLOWED_HOSTS,
+                &body,
+                MAX_RESPONSE_BYTES,
+                TIMEOUT_SECS,
+            )
+            .map_err(map_http_error)?;
+        Self::parse_result_body(&response, true, &now_rfc3339()?, RESULT_FINGERPRINT)
+    }
+}
+
+#[derive(Serialize)]
+struct LiveLookupPayload<'a> {
+    #[serde(rename = "clientid")]
+    client_id: &'a str,
+    #[serde(rename = "PAN")]
+    lookup: &'a str,
+    #[serde(rename = "IFSC")]
+    ifsc: &'a str,
+    #[serde(rename = "CHKVAL")]
+    check_value: &'a str,
+    token: &'a str,
+}
+
+fn resolve_issue(
+    issues: Vec<MufgIssue>,
+    issue_code: Option<&str>,
+    expected_name: &str,
+) -> Result<MufgIssue, ProviderError> {
+    if expected_name.trim().is_empty()
+        || issue_code
+            .is_some_and(|code| code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(ProviderError::Unknown(
+            "mufg issue selector is invalid".into(),
+        ));
+    }
+    let expected_name = normalized_issue_name(expected_name);
+    let mut matches = issues.into_iter().filter(|issue| {
+        issue_code.is_none_or(|code| issue.provider_issue_id == code)
+            && normalized_issue_name(&issue.display_name) == expected_name
+    });
+    let Some(issue) = matches.next() else {
+        return Err(ProviderError::Unavailable(
+            "mufg requested issue is not available".into(),
+        ));
+    };
+    if matches.next().is_some() {
+        return Err(ProviderError::Unknown(
+            "mufg issue selector was ambiguous".into(),
+        ));
+    }
+    Ok(issue)
+}
+
+fn normalized_issue_name(name: &str) -> String {
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized
+        .strip_suffix(" - ipo")
+        .unwrap_or(&normalized)
+        .trim()
+        .to_owned()
+}
+
+fn now_rfc3339() -> Result<String, ProviderError> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| ProviderError::Unknown("mufg observation time failed".into()))
+}
+
+fn wait_http_backstop() {
+    std::thread::sleep(std::time::Duration::from_millis(510));
+}
+
+fn map_http_error(error: HttpPolicyError) -> ProviderError {
+    match error {
+        HttpPolicyError::RateLimited | HttpPolicyError::Status(429) => ProviderError::RateLimited,
+        HttpPolicyError::Status(408 | 500..=599) | HttpPolicyError::Transport(_) => {
+            ProviderError::Unavailable("mufg transport is unavailable".into())
+        }
+        HttpPolicyError::InvalidUrl
+        | HttpPolicyError::HostNotAllowed { .. }
+        | HttpPolicyError::RedirectNotAllowed { .. }
+        | HttpPolicyError::TooManyRedirects
+        | HttpPolicyError::SizeCapExceeded(_)
+        | HttpPolicyError::Status(_)
+        | HttpPolicyError::UnexpectedContentType(_) => {
+            ProviderError::Unknown("mufg transport policy rejected the response".into())
+        }
+    }
 }
 
 impl Default for MufgIntimeProvider {
@@ -432,9 +703,11 @@ impl AllotmentProvider for MufgIntimeProvider {
     }
 
     fn health(&self) -> ProviderHealth {
-        // The deterministic session/token transport is not yet proven
-        // unattended; capability-honest reporting, not HTTP-200 optimism.
-        ProviderHealth::Degraded
+        if self.network_enabled && crate::LIVE_TRANSPORT_IMPLEMENTED {
+            ProviderHealth::Available
+        } else {
+            ProviderHealth::Degraded
+        }
     }
 
     fn supports(&self, issue: &RegistrarIssue) -> bool {
@@ -444,22 +717,32 @@ impl AllotmentProvider for MufgIntimeProvider {
 
     fn prepare_lookup(
         &self,
-        _context: &AllotmentLookupContext,
+        context: &AllotmentLookupContext,
     ) -> Result<Option<ProviderAllotmentResult>, ProviderError> {
-        Err(ProviderError::Retryable(
-            "mufg session/token preparation is required".into(),
-        ))
+        let session = self
+            .bootstrap_live_session(context.issue.issue_code.as_deref(), &context.issue.ipo_name)?;
+        match session.captcha_state {
+            MufgCaptchaState::Absent | MufgCaptchaState::Dormant => Ok(None),
+            MufgCaptchaState::Required => Err(ProviderError::NeedsHuman(
+                "mufg requires owner-completed human verification".into(),
+            )),
+            MufgCaptchaState::Unknown => Err(ProviderError::Unknown(
+                "mufg captcha state is ambiguous".into(),
+            )),
+        }
     }
 
     fn check_allotment(
         &self,
-        _context: &AllotmentLookupContext,
-        _pan: &Pan,
+        context: &AllotmentLookupContext,
+        pan: &Pan,
     ) -> Result<ProviderAllotmentResult, ProviderError> {
-        // Fail closed: session/token transport is a later slice.
-        Err(ProviderError::Retryable(
-            "mufg session/token transport is not prepared".into(),
-        ))
+        if !crate::REAL_INVESTOR_LOOKUP_AUTHORIZED {
+            return Err(ProviderError::Retryable(
+                "mufg real investor lookup is not authorized".into(),
+            ));
+        }
+        self.execute_live_lookup(context, pan)
     }
 }
 
@@ -527,35 +810,138 @@ fn html_attribute<'a>(tag: &'a str, name: &str) -> Result<Option<&'a str>, Provi
     Ok(None)
 }
 
-/// Return whether the MUFG CAPTCHA marker's own `<div>` container is
-/// explicitly hidden. Missing or malformed element boundaries are ambiguous.
-fn captcha_marker_hidden(page: &str, marker: usize) -> Option<bool> {
-    let marker_start = page[..marker].rfind('<')?;
-    if page[marker_start..marker].contains('>') {
-        return None;
-    }
-    let marker_end = marker_start + page[marker_start..].find('>')?;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptchaEvidence {
+    Hidden,
+    Visible,
+    Unknown,
+}
 
-    let before_marker = &page[..marker_start];
-    let container_start = before_marker.rfind("<div")?;
-    if before_marker[container_start..].contains("</div>") {
-        return None;
-    }
-    let container_end = container_start + page[container_start..].find('>')?;
-    if container_end >= marker_start || !page[marker_end + 1..].contains("</div>") {
-        return None;
+/// Classify actual CAPTCHA elements only; script-string references are not DOM
+/// elements. The current MUFG contract puts visibility on a bounded ancestor
+/// `.paddingcnd` div rather than the marker's immediate child container.
+fn captcha_element_evidence(page: &str) -> Result<Vec<CaptchaEvidence>, ProviderError> {
+    let mut stack: Vec<(&str, &str)> = Vec::new();
+    let mut evidence = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(relative_start) = page[cursor..].find('<') {
+        let start = cursor + relative_start;
+        if page[start..].starts_with("<!--") {
+            let end = page[start + 4..]
+                .find("-->")
+                .map(|relative| start + 4 + relative + 3)
+                .ok_or_else(|| ProviderError::Unknown("mufg captcha markup changed".into()))?;
+            cursor = end;
+            continue;
+        }
+        let end = start
+            + page[start..]
+                .find('>')
+                .ok_or_else(|| ProviderError::Unknown("mufg captcha markup changed".into()))?;
+        let tag = &page[start..=end];
+        let Some((name, closing)) = html_tag_name(tag) else {
+            cursor = end + 1;
+            continue;
+        };
+
+        if name == "script" && !closing {
+            let script_end = page[end + 1..]
+                .find("</script>")
+                .map(|relative| end + 1 + relative + "</script>".len())
+                .ok_or_else(|| ProviderError::Unknown("mufg captcha script changed".into()))?;
+            cursor = script_end;
+            continue;
+        }
+
+        if closing {
+            if matches!(name, "div" | "section") {
+                match stack.pop() {
+                    Some((open_name, _)) if open_name == name => {}
+                    _ => return Ok(vec![CaptchaEvidence::Unknown]),
+                }
+            }
+        } else {
+            if is_captcha_element(name, tag)? {
+                evidence.push(captcha_ancestor_evidence(&stack)?);
+            }
+            if matches!(name, "div" | "section") && !tag.ends_with("/>") {
+                stack.push((name, tag));
+            }
+        }
+        cursor = end + 1;
     }
 
-    let context = format!(
-        "{}{}",
-        &page[container_start..=container_end],
-        &page[marker_start..=marker_end]
-    );
-    let compact: String = context
+    if !evidence.is_empty() && !stack.is_empty() {
+        return Ok(vec![CaptchaEvidence::Unknown]);
+    }
+    Ok(evidence)
+}
+
+fn html_tag_name(tag: &str) -> Option<(&str, bool)> {
+    let bytes = tag.as_bytes();
+    if bytes.first() != Some(&b'<') {
+        return None;
+    }
+    let closing = bytes.get(1) == Some(&b'/');
+    let start = if closing { 2 } else { 1 };
+    let end = tag[start..].find(|character: char| {
+        character.is_ascii_whitespace() || matches!(character, '/' | '>')
+    })? + start;
+    (end > start).then_some((&tag[start..end], closing))
+}
+
+fn is_captcha_element(name: &str, tag: &str) -> Result<bool, ProviderError> {
+    let id = html_attribute(tag, "id")?;
+    let src = html_attribute(tag, "src")?;
+    Ok((name == "input" && id == Some("txtcaptch"))
+        || (name == "img"
+            && (matches!(id, Some("img_cap" | "cimage"))
+                || src.is_some_and(|value| value.starts_with("cimage.aspx")))))
+}
+
+fn captcha_ancestor_evidence(stack: &[(&str, &str)]) -> Result<CaptchaEvidence, ProviderError> {
+    for (name, tag) in stack.iter().rev() {
+        let id = html_attribute(tag, "id")?.unwrap_or("");
+        let class = html_attribute(tag, "class")?.unwrap_or("");
+        if class
+            .split_ascii_whitespace()
+            .any(|value| value == "paddingcnd")
+            || id.contains("captcha")
+            || class.contains("captcha")
+        {
+            if *name != "div" {
+                return Ok(CaptchaEvidence::Unknown);
+            }
+            return visibility_evidence(tag, class.contains("paddingcnd"));
+        }
+    }
+
+    let Some((name, tag)) = stack.iter().rev().find(|(name, _)| *name == "div") else {
+        return Ok(CaptchaEvidence::Unknown);
+    };
+    debug_assert_eq!(*name, "div");
+    visibility_evidence(tag, false)
+}
+
+fn visibility_evidence(tag: &str, current_wrapper: bool) -> Result<CaptchaEvidence, ProviderError> {
+    let style = html_attribute(tag, "style")?.unwrap_or("");
+    let compact: String = style
         .chars()
         .filter(|character| !character.is_ascii_whitespace())
         .collect();
-    Some(compact.contains("display:none"))
+    if compact.contains("display:none") {
+        Ok(CaptchaEvidence::Hidden)
+    } else if compact.contains("display:block")
+        || compact.contains("display:inline")
+        || compact.contains("display:flex")
+        || compact.contains("display:grid")
+        || (!current_wrapper && compact.is_empty())
+    {
+        Ok(CaptchaEvidence::Visible)
+    } else {
+        Ok(CaptchaEvidence::Unknown)
+    }
 }
 
 /// Extract the value inside `<tag>value</tag>` starting at the front of
