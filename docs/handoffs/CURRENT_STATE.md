@@ -131,7 +131,9 @@ Container Node 20 cannot start the current jsdom/undici Vitest workers; host Nod
 
 ## Exact next task
 
-Multi-registrar allotment subsystem (Gates 4A–4E) is fully implemented and independently reviewed; Gate 4F final system review is COMPLETE (PASS WITH NON-BLOCKING FINDINGS). Next: address the five pre-pilot conditions recorded in `docs/reviews/GATE_4F_INDEPENDENT_REVIEW.md` before any controlled real-PAN pilot execution: (1) remove/replace the `curl` shell-out in `kfintech_live.rs`, (2) wire per-provider `ProviderRatePolicy` into the service limiter, (3) demonstrate lease enforcement at the execution boundary, (4) unify `resolve`/`resolve_registrar` alias sets, (5) fix the cross-registrar `official_status_url` default. Real PAN remains blocked; no investor lookup is authorized.
+Gate 4F pre-pilot conditions A–E are **CLOSED** (commit `75af0ce`, 2026-08-30) and independently verified **PASS** (gpt-oss-120b via generalcompute; `docs/reviews/GATE_4F_CORRECTIONS_INDEPENDENT_REVIEW.md`): (A) KFintech transport replaced by shared bounded ureq+rustls client (`crates/allotment/src/http.rs`) — no curl/shell-out anywhere; (B) per-provider `ProviderRatePolicy` wired into the service limiter (`set_policy`/`policy_for`); (C) missing/empty `official_status_url` fails closed — no cross-registrar default; (D) lease enforcement proven at `run_allotment_job_once` (single-owner, stale recovery, no re-execution of finalized/cancelled); (E) unified canonical alias normalization shared by `resolve`/`resolve_registrar`. Full suite green (fmt, clippy `-D warnings`, ~186 cargo tests, npm check/build, secrets 156 files).
+
+Remaining before any controlled real-PAN pilot execution: (1) owner supplies the exact IPO/company name (do not guess from "Symbiotic"); (2) verify registrar/public-issue availability for that exact IPO; (3) secure identity mode verification (Linux Secret Service ACTIVE + runtime smoke; production sensitive mode ACTIVE; dev/device-derived key fallback DISALLOWED); (4) separate explicit owner authorization for the real PAN lookup. Real PAN remains blocked; no investor lookup is authorized.
 
 ## Gate 4E implemented
 
