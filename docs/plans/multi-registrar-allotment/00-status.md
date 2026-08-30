@@ -10,7 +10,8 @@
 - Gate 4D — MUFG session/token adapter: **APPROVED AND LOCKED** (independent correction re-review PASS)
 - Gate 4E — Cross-provider normalization + unified UI: **APPROVED AND LOCKED** (independent review PASS, gpt-oss-120b via generalcompute)
 - Gate 4F — Final system review: **COMPLETE** — PASS WITH NON-BLOCKING FINDINGS (kimi-k3 via NVIDIA NIM); pilot readiness YES WITH CONDITIONS
-- Gate 4F pre-pilot conditions A–E: **CLOSED** (`75af0ce`) — corrections review PASS (gpt-oss-120b via generalcompute; `docs/reviews/GATE_4F_CORRECTIONS_INDEPENDENT_REVIEW.md`)
+- Gate 4F pre-pilot conditions A–E: **CLOSED** (`75af0ce` + TLS amendment `6b8ff6a`) — corrections and amendment reviews PASS (gpt-oss-120b via generalcompute)
+- Controlled real-PAN pilot preparation: **FAIL — STOP PILOT** (Symbiotec Pharmalab Limited → MUFG issue `11926`; issue available, but CAPTCHA structure is `Unknown` and live investor transport is unavailable)
 
 ## Gate 1 lock record
 
@@ -61,7 +62,8 @@
 - [x] Gate 4D — MUFG session/token adapter — PASS (`db5be5d` + correction `82971e0`; review: `docs/reviews/GATE_4D_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4E — cross-provider normalization and UI — PASS (`1a57379`; review: `docs/reviews/GATE_4E_INDEPENDENT_REVIEW.md`)
 - [x] Gate 4F — final system review — PASS WITH NON-BLOCKING FINDINGS (review: `docs/reviews/GATE_4F_INDEPENDENT_REVIEW.md`)
-- [x] Gate 4F pre-pilot corrections A–E — CLOSED, corrections review PASS (`75af0ce`; review: `docs/reviews/GATE_4F_CORRECTIONS_INDEPENDENT_REVIEW.md`)
+- [x] Gate 4F pre-pilot corrections A–E — CLOSED, corrections reviews PASS (`75af0ce` + `6b8ff6a`; reviews: `docs/reviews/GATE_4F_CORRECTIONS_INDEPENDENT_REVIEW.md`, `docs/reviews/GATE_4F_TLS_AMENDMENT_INDEPENDENT_REVIEW.md`)
+- [ ] Controlled pilot provider precheck — **STOPPED** on MUFG CAPTCHA `Unknown` and unavailable real-investor transport; see `docs/security/CONTROLLED_REAL_PAN_PILOT.md`
 
 ## Verified starting point
 
@@ -72,7 +74,7 @@
 - Linux Secret Service synthetic-key smoke: PASS
 - Windows credential store: implemented/compiled; runtime smoke pending
 - Frontend canonical environment: host Node 26
-- Repository secret scan: PASS (129 files)
+- Repository secret scan: PASS (157 files)
 
 ## Gate 4A implementation record
 
@@ -82,7 +84,7 @@
 - Human-verification durable metadata: **SAFE VALIDATED REFERENCES ONLY**
 - Restart recovery: **STALE CONTINUATIONS EXPIRE; JOBS PRESERVED**
 - Fixture provenance contract: **IMPLEMENTED**
-- Live lookup authorization: **FAIL-CLOSED BLOCKED**
+- Live lookup authorization: **BLOCKED**
 - Independent review: **PASS — GEMINI 3.6 FLASH**
 - Evidence: `docs/reviews/GATE_4A_INDEPENDENT_REVIEW.md`
 

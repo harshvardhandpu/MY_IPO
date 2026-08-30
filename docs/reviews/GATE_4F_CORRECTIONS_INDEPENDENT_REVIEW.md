@@ -7,6 +7,13 @@
 - **Evidence**: diff_stat (11 files, +844/−47), diff_A (http.rs + kfintech_live.rs), diff_B_C (runtime.rs + service.rs), diff_E (registry.rs), diff_D_tests (lease/URL proofs + provider_contract additions); host-run test output 2026-08-30
 - **Provenance** (from response metadata): served model `gpt-oss-120b`; HTTP 200; prompt_tokens 12676, completion_tokens 325; stop_reason stop
 
+> **Audit correction (2026-08-30):** the original review accepted the
+> internal ureq `_tls` feature as active rustls transport. A subsequent
+> identifier-free live HTTPS precheck disproved that claim with a pre-transport
+> panic. Commit `6b8ff6a` enables the public `rustls` feature and adds a
+> regression. The focused independent amendment review passed; see
+> `GATE_4F_TLS_AMENDMENT_INDEPENDENT_REVIEW.md`. Conditions B–E are unchanged.
+
 ## Verdict
 
 **PASS**
@@ -15,7 +22,7 @@
 
 | Cond | Requirement | Result |
 |------|-------------|--------|
-| A | Remove KFintech curl shell-out → bounded native HTTP client | **PASS** — ureq+rustls; TLS, host allowlist, redirect limits, size cap, timeouts, UA, content-type check, sanitized errors, no body logging, no fallback |
+| A | Remove KFintech curl shell-out → bounded native HTTP client | **PASS AFTER AMENDMENT `6b8ff6a`** — public ureq `rustls` feature; TLS, host allowlist, redirect limits, size cap, timeouts, UA, content-type check, sanitized errors, no body logging, no fallback |
 | B | Per-provider rate limiting wired into execution | **PASS** — per-provider policy map; set_policy per registrar; policy_for consulted in wait_turn |
 | C | No KFintech URL default; fail closed | **PASS** — missing/empty official_status_url → ServiceError::Invalid; no default applied |
 | D | JobLease enforcement proven at boundary | **PASS** — single-owner, stale-lease recovery, COMPLETE/CANCELLED never re-executed; exercised via run_allotment_job_once |
