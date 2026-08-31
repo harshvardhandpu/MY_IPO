@@ -75,8 +75,8 @@ describe("desktop shell", () => {
 
     render(<App bridge={bridge} />);
 
-    expect(await screen.findByText("Example IPO")).toBeVisible();
+    expect((await screen.findAllByText("Example IPO")).length).toBeGreaterThan(0);
     expect(screen.getByText("MUFG Intime India")).toBeVisible();
-    expect(screen.getByText("₹14,820")).toBeVisible();
+    expect(screen.getAllByText("₹14,820").length).toBeGreaterThan(0);
   });
 });

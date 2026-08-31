@@ -234,6 +234,58 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+/** Compact horizontal bar — ratio must be derived from real values only. */
+function FinanceBar({
+  label,
+  valueLabel,
+  ratio,
+  tone = "accent",
+}: {
+  label: string;
+  valueLabel: string;
+  ratio: number;
+  tone?: "accent" | "positive" | "warning" | "unknown" | "muted";
+}) {
+  const width = Number.isFinite(ratio) ? Math.max(0, Math.min(100, Math.round(ratio * 100))) : 0;
+  return (
+    <div className="finance-bar" role="img" aria-label={`${label}: ${valueLabel}`}>
+      <div className="finance-bar-meta">
+        <span>{label}</span>
+        <strong>{valueLabel}</strong>
+      </div>
+      <div className="finance-bar-track" aria-hidden="true">
+        <span className={`finance-bar-fill ${tone}`} style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ProgressMeter({ label, done, total }: { label: string; done: number; total: number }) {
+  const safeTotal = Math.max(0, total);
+  const safeDone = Math.max(0, Math.min(done, safeTotal || done));
+  const width = safeTotal === 0 ? 0 : Math.round((safeDone / safeTotal) * 100);
+  return (
+    <div
+      className="progress-meter"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={safeTotal}
+      aria-valuenow={safeDone}
+    >
+      <div className="finance-bar-meta">
+        <span>{label}</span>
+        <strong>
+          {safeDone}/{safeTotal || 0}
+        </strong>
+      </div>
+      <div className="finance-bar-track" aria-hidden="true">
+        <span className="finance-bar-fill accent" style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function Mark() {
   return (
     <span className="brand-mark" aria-hidden="true">
@@ -546,6 +598,20 @@ function DashboardView({
     },
   ];
 
+  const accountTotal = dashboard.member_count + dashboard.friend_count;
+  const capitalScale = Math.max(dashboard.total_planned_paise, dashboard.profit_paise, 1);
+  const exposureMax = Math.max(...activity.map((row) => row.planned_amount_paise), 0);
+  const statusBuckets = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of activity) {
+      counts.set(row.overall_job_state, (counts.get(row.overall_job_state) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  }, [activity]);
+  const pendingAccounts = activity.reduce((sum, row) => sum + row.pending_count, 0);
+  const finalAccounts = activity.reduce((sum, row) => sum + row.final_count, 0);
+  const checkTotal = pendingAccounts + finalAccounts;
+
   return (
     <div className="dashboard page-content">
       <header className="page-heading dashboard-heading">
@@ -583,6 +649,108 @@ function DashboardView({
             <small>{metric.detail}</small>
           </div>
         ))}
+      </section>
+
+      <section className="finance-grid" aria-label="Portfolio visuals">
+        <article className="panel finance-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <h2>Capital snapshot</h2>
+              <p>Invested capital vs realized profit</p>
+            </div>
+          </div>
+          <div className="finance-stack">
+            <FinanceBar
+              label="Total invested"
+              valueLabel={formatRupees(dashboard.total_planned_paise)}
+              ratio={dashboard.total_planned_paise / capitalScale}
+              tone="accent"
+            />
+            <FinanceBar
+              label="Realized profit"
+              valueLabel={formatRupees(dashboard.profit_paise)}
+              ratio={dashboard.profit_paise / capitalScale}
+              tone="positive"
+            />
+            <FinanceBar
+              label="Core accounts"
+              valueLabel={`${dashboard.member_count}`}
+              ratio={accountTotal === 0 ? 0 : dashboard.member_count / accountTotal}
+              tone="accent"
+            />
+            <FinanceBar
+              label="Friend accounts"
+              valueLabel={`${dashboard.friend_count}`}
+              ratio={accountTotal === 0 ? 0 : dashboard.friend_count / accountTotal}
+              tone="unknown"
+            />
+          </div>
+        </article>
+
+        <article className="panel finance-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <h2>Allotment progress</h2>
+              <p>From submitted applications only</p>
+            </div>
+          </div>
+          {activity.length === 0 ? (
+            <div className="finance-empty">
+              No application checks yet. Submitted IPOs appear here with real progress.
+            </div>
+          ) : (
+            <div className="finance-stack">
+              <ProgressMeter label="Accounts finalized" done={finalAccounts} total={checkTotal} />
+              {statusBuckets.map(([status, count]) => {
+                const presentation = statusPresentation(status);
+                const tone =
+                  presentation.tone === "positive"
+                    ? "positive"
+                    : presentation.tone === "warning" || presentation.tone === "negative"
+                      ? "warning"
+                      : presentation.tone === "unknown"
+                        ? "unknown"
+                        : "accent";
+                return (
+                  <FinanceBar
+                    key={status}
+                    label={presentation.label}
+                    valueLabel={`${count}`}
+                    ratio={count / activity.length}
+                    tone={tone}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </article>
+
+        <article className="panel finance-panel finance-panel-wide">
+          <div className="panel-heading compact-heading">
+            <div>
+              <h2>IPO exposure</h2>
+              <p>Planned amounts by submitted application</p>
+            </div>
+            <span>{activity.length} records</span>
+          </div>
+          {activity.length === 0 ? (
+            <div className="finance-empty">
+              No exposure yet. Start an investment or add a historical application.
+            </div>
+          ) : (
+            <div className="finance-stack">
+              {activity.map((candidate) => (
+                <FinanceBar
+                  key={candidate.application_id}
+                  label={candidate.ipo_name}
+                  valueLabel={formatRupees(candidate.planned_amount_paise)}
+                  ratio={exposureMax === 0 ? 0 : candidate.planned_amount_paise / exposureMax}
+                  tone="accent"
+                />
+              ))}
+            </div>
+          )}
+        </article>
       </section>
 
       <section className="dashboard-grid">
@@ -830,6 +998,30 @@ function MembersView({
 
       <section className="account-list" aria-label="Core members">
         <p className="eyebrow">Core members</p>
+        <div className="member-summary panel finance-panel">
+          <div className="finance-stack">
+            <FinanceBar
+              label="Core members"
+              valueLabel={`${members.length}`}
+              ratio={
+                members.length + friends.length === 0
+                  ? 0
+                  : members.length / (members.length + friends.length)
+              }
+              tone="accent"
+            />
+            <FinanceBar
+              label="Friend accounts"
+              valueLabel={`${friends.length}`}
+              ratio={
+                members.length + friends.length === 0
+                  ? 0
+                  : friends.length / (members.length + friends.length)
+              }
+              tone="unknown"
+            />
+          </div>
+        </div>
         {members.map((member) => (
           <article className="account-row" key={member.id}>
             <span className="account-monogram">{member.name.slice(0, 2).toUpperCase()}</span>
@@ -858,6 +1050,12 @@ function MembersView({
               <div>
                 <strong>{friend.label}</strong>
                 <small>{friend.share_basis_points / 100}% profit share</small>
+                <FinanceBar
+                  label="Profit share"
+                  valueLabel={`${friend.share_basis_points / 100}%`}
+                  ratio={friend.share_basis_points / 10000}
+                  tone="positive"
+                />
               </div>
               <code>{friend.masked_pan}</code>
               <button className="text-button" onClick={() => void archive(friend)} type="button">
@@ -1330,6 +1528,12 @@ function InvestView({
                         Score {ipo.score} · {ipo.recommended_account_count} accounts ·{" "}
                         {ipo.recommended_allocation_ratio_bp / 100}% allocation
                       </small>
+                      <FinanceBar
+                        label="Recommended allocation"
+                        valueLabel={`${ipo.recommended_allocation_ratio_bp / 100}%`}
+                        ratio={ipo.recommended_allocation_ratio_bp / 10000}
+                        tone={ipo.skip ? "muted" : "accent"}
+                      />
                       {ipo.missing_public_data.length > 0 && (
                         <small>Missing: {ipo.missing_public_data.join(", ")}</small>
                       )}
@@ -1666,6 +1870,15 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                 {c.provider_id === "unsupported" && (
                   <StatusBadge status="MANUAL_FALLBACK_REQUIRED" />
                 )}
+                <ProgressMeter
+                  label={`${c.ipo_name} accounts finalized`}
+                  done={c.final_count}
+                  total={
+                    c.final_count + c.pending_count > 0
+                      ? c.final_count + c.pending_count
+                      : c.account_count
+                  }
+                />
               </span>
             </label>
           ))}
@@ -1714,48 +1927,103 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
               </p>
             </div>
           </div>
+          <div className="report-summary finance-stack">
+            <ProgressMeter
+              label="Accounts finalized"
+              done={report.final_count}
+              total={report.accounts.length}
+            />
+            <FinanceBar
+              label="Pending accounts"
+              valueLabel={`${report.pending_count}`}
+              ratio={
+                report.accounts.length === 0 ? 0 : report.pending_count / report.accounts.length
+              }
+              tone="warning"
+            />
+            <FinanceBar
+              label="Applied capital (sum)"
+              valueLabel={formatRupees(
+                report.accounts.reduce((sum, row) => sum + row.application_amount_paise, 0),
+              )}
+              ratio={1}
+              tone="accent"
+            />
+          </div>
           <ul className="stack-list">
-            {report.accounts.map((row) => (
-              <li key={row.attempt_id}>
-                <strong>
-                  {row.display_name} · {row.account_kind}
-                </strong>
-                <StatusBadge status={row.status} />
-                <small>
-                  {row.masked_pan} · {row.source} · {row.provenance}
-                  {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
-                  {row.allotted_shares != null ? ` / ${row.allotted_shares} shares` : ""}
-                  {` · ${formatRupees(row.application_amount_paise)} applied`}
-                </small>
-                {row.safe_message && <p>{row.safe_message}</p>}
-                {row.human_verification_state && report.official_status_url && (
-                  <button
-                    aria-label={`Continue Verification for ${row.display_name}`}
-                    className="secondary-button"
-                    onClick={() =>
-                      window.open(report.official_status_url ?? "", "_blank", "noopener,noreferrer")
-                    }
-                    type="button"
-                  >
-                    Continue Verification
-                  </button>
-                )}
-                {row.estimated_profit_paise != null && (
-                  <p>
-                    Estimated profit {formatRupees(row.estimated_profit_paise)} · {row.profit_basis}
-                    {row.profit_provenance ? ` · ${row.profit_provenance}` : ""}
-                  </p>
-                )}
-                {row.allotted_shares != null && row.allotted_shares > 0 && (
-                  <ProfitEditor
-                    actorMemberId={members[0]?.id ?? "unknown"}
-                    bridge={bridge}
-                    report={report}
-                    row={row}
+            {report.accounts.map((row) => {
+              const amountMax = Math.max(
+                ...report.accounts.map((entry) => entry.application_amount_paise),
+                1,
+              );
+              return (
+                <li key={row.attempt_id}>
+                  <strong>
+                    {row.display_name} · {row.account_kind}
+                  </strong>
+                  <StatusBadge status={row.status} />
+                  <small>
+                    {row.masked_pan} · {row.source} · {row.provenance}
+                    {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
+                    {row.allotted_shares != null ? ` / ${row.allotted_shares} shares` : ""}
+                    {` · ${formatRupees(row.application_amount_paise)} applied`}
+                  </small>
+                  <FinanceBar
+                    label="Applied amount"
+                    valueLabel={formatRupees(row.application_amount_paise)}
+                    ratio={row.application_amount_paise / amountMax}
+                    tone="accent"
                   />
-                )}
-              </li>
-            ))}
+                  {row.estimated_profit_paise != null && (
+                    <FinanceBar
+                      label="Estimated profit"
+                      valueLabel={formatRupees(row.estimated_profit_paise)}
+                      ratio={
+                        row.application_amount_paise === 0
+                          ? 0
+                          : Math.min(
+                              1,
+                              Math.abs(row.estimated_profit_paise) / row.application_amount_paise,
+                            )
+                      }
+                      tone="positive"
+                    />
+                  )}
+                  {row.safe_message && <p>{row.safe_message}</p>}
+                  {row.human_verification_state && report.official_status_url && (
+                    <button
+                      aria-label={`Continue Verification for ${row.display_name}`}
+                      className="secondary-button"
+                      onClick={() =>
+                        window.open(
+                          report.official_status_url ?? "",
+                          "_blank",
+                          "noopener,noreferrer",
+                        )
+                      }
+                      type="button"
+                    >
+                      Continue Verification
+                    </button>
+                  )}
+                  {row.estimated_profit_paise != null && (
+                    <p>
+                      Estimated profit {formatRupees(row.estimated_profit_paise)} ·{" "}
+                      {row.profit_basis}
+                      {row.profit_provenance ? ` · ${row.profit_provenance}` : ""}
+                    </p>
+                  )}
+                  {row.allotted_shares != null && row.allotted_shares > 0 && (
+                    <ProfitEditor
+                      actorMemberId={members[0]?.id ?? "unknown"}
+                      bridge={bridge}
+                      report={report}
+                      row={row}
+                    />
+                  )}
+                </li>
+              );
+            })}
           </ul>
           {report.official_status_url && (
             <p>
