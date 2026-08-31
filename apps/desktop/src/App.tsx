@@ -171,6 +171,19 @@ function formatRupees(paise: number): string {
   }).format(paise / 100);
 }
 
+function userFacingError(cause: unknown, fallback: string): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /__TAURI_INTERNALS__|invoke|undefined/i.test(message) ? fallback : message;
+}
+
+function sourceLabel(source: string): string {
+  return source === "OWNER_HISTORICAL_ENTRY" ? "Historical record" : "Current application";
+}
+
+function provenanceLabel(provenance: string): string {
+  return provenance === "MANUAL" ? "Manual result" : "Registrar result";
+}
+
 type StatusTone = "positive" | "negative" | "warning" | "info" | "unknown";
 
 type StatusPresentation = {
@@ -286,6 +299,57 @@ function ProgressMeter({ label, done, total }: { label: string; done: number; to
   );
 }
 
+function StatusRing({ buckets, total }: { buckets: Array<[string, number]>; total: number }) {
+  const colors: Record<StatusTone, string> = {
+    positive: "var(--positive)",
+    negative: "var(--danger)",
+    warning: "var(--warning)",
+    info: "var(--accent)",
+    unknown: "var(--unknown)",
+  };
+  let offset = 0;
+  const segments = buckets.map(([status, count]) => {
+    const start = offset;
+    offset += total === 0 ? 0 : (count / total) * 100;
+    const presentation = statusPresentation(status);
+    return `${colors[presentation.tone]} ${start}% ${offset}%`;
+  });
+  const background =
+    total === 0 ? "conic-gradient(var(--border) 0 100%)" : `conic-gradient(${segments.join(", ")})`;
+
+  return (
+    <div className="status-ring-layout">
+      <div
+        aria-label={`${total} application status records`}
+        className="status-ring"
+        role="img"
+        style={{ background }}
+      >
+        <div className="status-ring-center">
+          <strong>{total}</strong>
+          <span>records</span>
+        </div>
+      </div>
+      <ul className="status-legend">
+        {buckets.length === 0 ? (
+          <li className="status-legend-empty">No allotment checks yet</li>
+        ) : (
+          buckets.map(([status, count]) => {
+            const presentation = statusPresentation(status);
+            return (
+              <li key={status}>
+                <span className={`legend-dot ${presentation.tone}`} aria-hidden="true" />
+                <span>{presentation.label}</span>
+                <strong>{count}</strong>
+              </li>
+            );
+          })
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function Mark() {
   return (
     <span className="brand-mark" aria-hidden="true">
@@ -307,9 +371,9 @@ function AppShell({
 }) {
   const items: Array<{ label: string; view: View; glyph: string }> = [
     { label: "Dashboard", view: "dashboard", glyph: "▦" },
-    { label: "Members", view: "members", glyph: "◎" },
     { label: "Investments", view: "invest", glyph: "₹" },
     { label: "Check Allotment", view: "allotment", glyph: "✓" },
+    { label: "Members", view: "members", glyph: "◎" },
   ];
 
   return (
@@ -434,7 +498,12 @@ function Onboarding({
         masked_pan: response.masked_pan,
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(
+        userFacingError(
+          cause,
+          "The owner profile could not be saved. Reopen the app and try again.",
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -614,7 +683,7 @@ function DashboardView({
       reloadActivity();
       await onChanged?.();
     } catch (cause) {
-      setVoidError(cause instanceof Error ? cause.message : String(cause));
+      setVoidError(userFacingError(cause, "The submitted entry could not be voided. Try again."));
     } finally {
       setVoidBusy(false);
     }
@@ -662,7 +731,7 @@ function DashboardView({
       <header className="page-heading dashboard-heading">
         <div>
           <h1>Dashboard</h1>
-          <p>Capital, applications, and registrar work in one private ledger.</p>
+          <p>Private IPO portfolio overview</p>
         </div>
         <fieldset className="quick-actions" aria-label="Quick actions">
           <button
@@ -686,9 +755,9 @@ function DashboardView({
         </fieldset>
       </header>
 
-      <section className="summary-strip" aria-label="Portfolio summary">
+      <section className="summary-strip kpi-grid" aria-label="Portfolio summary">
         {metrics.map((metric) => (
-          <div className="summary-metric" key={metric.label}>
+          <div className="summary-metric kpi-card" key={metric.label}>
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
             <small>{metric.detail}</small>
@@ -696,17 +765,27 @@ function DashboardView({
         ))}
       </section>
 
-      <section className="finance-grid" aria-label="Portfolio visuals">
-        <article className="panel finance-panel">
+      <section className="finance-grid dashboard-analytics" aria-label="Portfolio analytics">
+        <article className="panel finance-panel capital-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <h2>Capital snapshot</h2>
-              <p>Invested capital vs realized profit</p>
+              <h2>Capital overview</h2>
+              <p>Active capital and realized outcomes</p>
+            </div>
+          </div>
+          <div className="capital-highlight">
+            <div>
+              <span>Active capital</span>
+              <strong>{formatRupees(dashboard.total_planned_paise)}</strong>
+            </div>
+            <div className="capital-highlight-side">
+              <span>Realized profit</span>
+              <strong className="positive-value">{formatRupees(dashboard.profit_paise)}</strong>
             </div>
           </div>
           <div className="finance-stack">
             <FinanceBar
-              label="Total invested"
+              label="Capital deployed"
               valueLabel={formatRupees(dashboard.total_planned_paise)}
               ratio={dashboard.total_planned_paise / capitalScale}
               tone="accent"
@@ -732,19 +811,24 @@ function DashboardView({
           </div>
         </article>
 
-        <article className="panel finance-panel">
+        <article className="panel finance-panel status-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <h2>Allotment progress</h2>
-              <p>From submitted applications only</p>
+              <h2>Allotment status</h2>
+              <p>Application-level checks, kept distinct</p>
             </div>
           </div>
           {activity.length === 0 ? (
-            <div className="finance-empty">
-              No application checks yet. Submitted IPOs appear here with real progress.
-            </div>
+            <>
+              <StatusRing buckets={statusBuckets} total={activity.length} />
+              <div className="finance-empty compact-empty">
+                No allotment checks yet. Status will appear after a submitted application is
+                checked.
+              </div>
+            </>
           ) : (
-            <div className="finance-stack">
+            <div className="status-panel-body">
+              <StatusRing buckets={statusBuckets} total={activity.length} />
               <ProgressMeter label="Accounts finalized" done={finalAccounts} total={checkTotal} />
               {statusBuckets.map(([status, count]) => {
                 const presentation = statusPresentation(status);
@@ -780,7 +864,7 @@ function DashboardView({
           </div>
           {activity.length === 0 ? (
             <div className="finance-empty">
-              No exposure yet. Start an investment or add a historical application.
+              No active exposure yet. Start an investment or add a historical application.
             </div>
           ) : (
             <div className="finance-stack">
@@ -1027,7 +1111,7 @@ function MembersView({
       setForm({ name: "", upi: "", pan: "", broker: "", eligible: true });
       setAdding(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(userFacingError(cause, "The request could not be completed. Try again."));
     }
   }
 
@@ -1121,29 +1205,22 @@ function MembersView({
 
       <section className="account-list" aria-label="Core members">
         <p className="eyebrow">Core members</p>
-        <div className="member-summary panel finance-panel">
-          <div className="finance-stack">
-            <FinanceBar
-              label="Core members"
-              valueLabel={`${members.length}`}
-              ratio={
-                members.length + friends.length === 0
-                  ? 0
-                  : members.length / (members.length + friends.length)
-              }
-              tone="accent"
-            />
-            <FinanceBar
-              label="Friend accounts"
-              valueLabel={`${friends.length}`}
-              ratio={
-                members.length + friends.length === 0
-                  ? 0
-                  : friends.length / (members.length + friends.length)
-              }
-              tone="unknown"
-            />
+        <div className="member-summary panel member-overview">
+          <div className="member-overview-copy">
+            <span>Account map</span>
+            <p>Core members belong to this workspace. Friend accounts are shared for review.</p>
           </div>
+          <fieldset className="member-count-grid">
+            <legend className="sr-only">Account counts</legend>
+            <div>
+              <strong>{members.length}</strong>
+              <span>Core members</span>
+            </div>
+            <div>
+              <strong>{friends.length}</strong>
+              <span>Friend accounts</span>
+            </div>
+          </fieldset>
         </div>
         {members.map((member) => (
           <article className="account-row" key={member.id}>
@@ -1162,7 +1239,10 @@ function MembersView({
         <p className="eyebrow">Friend accounts</p>
         {friends.length === 0 ? (
           <div className="empty-row">
-            No friend accounts yet. Add one without exposing plaintext PAN.
+            <span>No friend accounts yet. Add one without exposing plaintext PAN.</span>
+            <button className="text-button" onClick={() => setAdding(true)} type="button">
+              + Add friend account
+            </button>
           </div>
         ) : (
           friends.map((friend) => (
@@ -1326,7 +1406,8 @@ function HistoricalApplicationForm({
           I affirm this is a real historical application made from my primary account.
         </label>
         <p>
-          Source: <code>OWNER_HISTORICAL_ENTRY</code> · Automated result: Not yet checked
+          Owner-entered record · No automated result — this record is not checked with the
+          registrar.
         </p>
         {message && (
           <p className="success-message" role="status">
@@ -1431,7 +1512,7 @@ function InvestView({
       });
       setRecommendation(response);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(userFacingError(cause, "The request could not be completed. Try again."));
     } finally {
       setBusy(false);
     }
@@ -1462,7 +1543,7 @@ function InvestView({
       setMessage("Investment session submitted");
       await onSubmitted();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(userFacingError(cause, "The request could not be completed. Try again."));
     } finally {
       setBusy(false);
     }
@@ -1485,7 +1566,10 @@ function InvestView({
         <div>
           <p className="eyebrow">Investment session</p>
           <h1>Plan first. Ask safely. Submit deliberately.</h1>
-          <p>CHECK sends only capital, account count, IPO names, amounts, and public references.</p>
+          <p>
+            CHECK securely sends only approved non-secret session and account references, capital,
+            IPO names, and amounts.
+          </p>
           <button className="text-button" type="button" onClick={() => setHistoricalMode(true)}>
             Add historical application
           </button>
@@ -1629,10 +1713,11 @@ function InvestView({
           <p className="eyebrow">Recommendation review</p>
           {!recommendation ? (
             <div className="recommendation-empty">
-              <span>DEV</span>
+              <span>Preview only</span>
               <h2>Nothing leaves the private boundary yet.</h2>
               <p>
-                CHECK builds the approved request and runs the deterministic development algorithm.
+                CHECK securely sends only approved fields and runs the deterministic recommendation
+                preview.
               </p>
             </div>
           ) : (
@@ -1684,7 +1769,7 @@ function InvestView({
         </div>
         <div className="action-buttons">
           <button
-            className="secondary-button"
+            className={recommendation ? "secondary-button" : "primary-button"}
             disabled={busy}
             onClick={() => void check()}
             type="button"
@@ -1751,7 +1836,7 @@ function ProfitEditor({
       });
       setResult(estimate);
     } catch (cause) {
-      setError(String(cause));
+      setError(userFacingError(cause, "The profit estimate could not be calculated. Try again."));
     }
   }
 
@@ -1840,14 +1925,28 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
     bridge
       .invoke<SecurityStatus>("get_security_status")
       .then(setSecurity)
-      .catch((e) => setError(String(e)));
+      .catch((e) =>
+        setError(
+          userFacingError(
+            e,
+            "Security status is unavailable. Reopen the desktop app and try again.",
+          ),
+        ),
+      );
     bridge
       .invoke<AllotmentCandidate[]>("list_allotment_candidates")
       .then((rows) => {
         setCandidates(rows);
         if (rows[0]) setSelected(rows[0].application_id);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) =>
+        setError(
+          userFacingError(
+            e,
+            "Submitted applications are unavailable. Reopen the desktop app and try again.",
+          ),
+        ),
+      );
   }, [bridge]);
 
   useEffect(() => {
@@ -1867,7 +1966,9 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
           setReport(next);
           setMessage(`Job ${next.job_id} → ${next.status}`);
         })
-        .catch((cause) => setError(String(cause)));
+        .catch((cause) =>
+          setError(userFacingError(cause, "The allotment job could not be refreshed. Try again.")),
+        );
     }, 750);
     return () => window.clearInterval(timer);
   }, [bridge, report]);
@@ -1897,7 +1998,12 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
       setReport(result);
       setMessage(`Job ${result.job_id} → ${result.status}`);
     } catch (e) {
-      setError(String(e));
+      setError(
+        userFacingError(
+          e,
+          "The allotment check is unavailable. Reopen the desktop app and try again.",
+        ),
+      );
       setBusy(false);
     }
   }
@@ -1924,7 +2030,7 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
       setReport(next);
       setMessage("Manual result saved with explicit MANUAL provenance.");
     } catch (cause) {
-      setError(String(cause));
+      setError(userFacingError(cause, "The manual result could not be saved. Try again."));
     }
   }
 
@@ -2018,7 +2124,11 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
             onClick={runCheck}
             type="button"
           >
-            {busy ? "Queued · running in background…" : "Check All Accounts"}
+            {busy
+              ? "Queued · running in background…"
+              : candidates.length
+                ? "Check All Accounts"
+                : "No applications to check"}
           </button>
           {busy && report && (
             <button
@@ -2037,9 +2147,7 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
             <div>
               <p className="eyebrow">Report card</p>
               <h2>{report.ipo_name}</h2>
-              <p>
-                {report.registrar_name} · {report.provider_id}
-              </p>
+              <p>Registrar: {report.registrar_name}</p>
               <p className="report-status">
                 <StatusBadge status={report.status} />
                 <span>
@@ -2086,7 +2194,7 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                   </strong>
                   <StatusBadge status={row.status} />
                   <small>
-                    {row.masked_pan} · {row.source} · {row.provenance}
+                    {row.masked_pan} · {sourceLabel(row.source)} · {provenanceLabel(row.provenance)}
                     {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
                     {row.allotted_shares != null ? ` / ${row.allotted_shares} shares` : ""}
                     {` · ${formatRupees(row.application_amount_paise)} applied`}
