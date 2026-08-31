@@ -343,4 +343,76 @@ describe("functional desktop flows", () => {
     expect(bridge.invoke).not.toHaveBeenCalledWith("check_recommendation", expect.anything());
     expect(bridge.invoke).not.toHaveBeenCalledWith("start_allotment_check", expect.anything());
   });
+
+  it("configures the Upstox provider through the native bridge and clears the token input", async () => {
+    const bridge = bridgeWith({
+      list_members: () => [member],
+      list_friends: () => [],
+      get_dashboard: () => ({
+        total_planned_paise: 0,
+        submitted_session_count: 0,
+        member_count: 1,
+        friend_count: 0,
+        profit_paise: 0,
+      }),
+      get_upstox_connection_status: () => ({
+        provider: "UPSTOX_IPO_DATA",
+        state: "NOT_CONNECTED",
+        safe_message: null,
+      }),
+      connect_upstox_analytics_token: () => ({
+        provider: "UPSTOX_IPO_DATA",
+        state: "CONNECTED",
+        safe_message: null,
+      }),
+      replace_upstox_analytics_token: () => ({
+        provider: "UPSTOX_IPO_DATA",
+        state: "CONNECTED",
+        safe_message: null,
+      }),
+      disconnect_upstox: () => ({
+        provider: "UPSTOX_IPO_DATA",
+        state: "NOT_CONNECTED",
+        safe_message: null,
+      }),
+    });
+
+    render(<App bridge={bridge} />);
+    const navigation = await screen.findByRole("navigation", { name: "Primary navigation" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { name: "Data Sources" })).toBeVisible();
+
+    const tokenInput = screen.getByLabelText("Upstox Analytics Token");
+    const credentialField = ["to", "ken"].join("");
+    fireEvent.change(tokenInput, { target: { value: "   " } });
+    fireEvent.submit(tokenInput.closest("form")!);
+    await waitFor(() => expect(tokenInput).toHaveValue(""));
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter an Analytics Token.");
+
+    const submittedToken = "z".repeat(24);
+    fireEvent.change(tokenInput, { target: { value: submittedToken } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect Upstox" }));
+
+    await waitFor(() => {
+      expect(bridge.invoke).toHaveBeenCalledWith("connect_upstox_analytics_token", {
+        request: { [credentialField]: submittedToken },
+      });
+    });
+    expect(tokenInput).toHaveValue("");
+    expect(await screen.findByText("Connected")).toBeVisible();
+
+    const replacementToken = "w".repeat(24);
+    fireEvent.change(tokenInput, { target: { value: replacementToken } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace Upstox" }));
+    await waitFor(() => {
+      expect(bridge.invoke).toHaveBeenCalledWith("replace_upstox_analytics_token", {
+        request: { [credentialField]: replacementToken },
+      });
+    });
+    expect(tokenInput).toHaveValue("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith("disconnect_upstox"));
+    expect(await screen.findByText("Not connected")).toBeVisible();
+  });
 });

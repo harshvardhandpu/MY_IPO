@@ -65,7 +65,7 @@ interface HistoricalApplicationResponse {
   source: string;
 }
 
-type View = "dashboard" | "members" | "invest" | "allotment";
+type View = "dashboard" | "members" | "invest" | "allotment" | "settings";
 type BootState = "loading" | "ready" | "offline";
 
 interface AllotmentCandidate {
@@ -132,6 +132,12 @@ interface SecurityStatus {
   real_pan_allowed: boolean;
   os_keyring_release_blocker: boolean;
   blocker?: string | null;
+}
+
+interface UpstoxConnectionStatus {
+  provider: "UPSTOX_IPO_DATA";
+  state: "NOT_CONNECTED" | "CONNECTED" | "FAILED";
+  safe_message: string | null;
 }
 
 interface EstimatedProfit {
@@ -374,6 +380,7 @@ function AppShell({
     { label: "Investments", view: "invest", glyph: "₹" },
     { label: "Check Allotment", view: "allotment", glyph: "✓" },
     { label: "Members", view: "members", glyph: "◎" },
+    { label: "Settings", view: "settings", glyph: "⚙" },
   ];
 
   return (
@@ -438,6 +445,152 @@ function AppShell({
         </header>
         {children}
       </main>
+    </div>
+  );
+}
+
+function SettingsView({ bridge }: { bridge: CommandBridge }) {
+  const [status, setStatus] = useState<UpstoxConnectionStatus | null>(null);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const next = await bridge.invoke<UpstoxConnectionStatus>("get_upstox_connection_status");
+      setStatus(next);
+      setError("");
+    } catch {
+      setStatus({
+        provider: "UPSTOX_IPO_DATA",
+        state: "FAILED",
+        safe_message: "Could not read the OS keyring.",
+      });
+    }
+  }, [bridge]);
+
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
+
+  async function saveToken(event: FormEvent) {
+    event.preventDefault();
+    if (!token.trim()) {
+      setToken("");
+      setError("Enter an Analytics Token.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    let submittedToken = token;
+    setToken("");
+    try {
+      const command =
+        status?.state === "CONNECTED"
+          ? "replace_upstox_analytics_token"
+          : "connect_upstox_analytics_token";
+      const next = await bridge.invoke<UpstoxConnectionStatus>(command, {
+        request: { token: submittedToken },
+      });
+      setStatus(next);
+      if (next.state === "FAILED") setError(next.safe_message ?? "Could not save the token.");
+    } catch {
+      setError("Could not save the Analytics Token.");
+    } finally {
+      submittedToken = "";
+      setToken("");
+      setBusy(false);
+    }
+  }
+
+  async function disconnectProvider() {
+    setBusy(true);
+    setError("");
+    try {
+      setStatus(await bridge.invoke<UpstoxConnectionStatus>("disconnect_upstox"));
+    } catch {
+      setError("Could not disconnect Upstox.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const connected = status?.state === "CONNECTED";
+  return (
+    <div className="content-column settings-view">
+      <header className="page-heading">
+        <div>
+          <span className="eyebrow">Settings / Data Sources</span>
+          <h1>Data Sources</h1>
+          <p>Connect read-only public IPO metadata without sharing private Sanket data.</p>
+        </div>
+      </header>
+      <section className="form-panel provider-panel" aria-labelledby="upstox-heading">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Read-only provider</span>
+            <h2 id="upstox-heading">Upstox IPO Data</h2>
+          </div>
+          <span className={`status-badge ${connected ? "positive" : "warning"}`}>
+            {connected ? "Connected" : status?.state === "FAILED" ? "Unavailable" : "Not connected"}
+          </span>
+        </div>
+        <div className="provider-panel-body">
+          <p>
+            Use the Analytics Token from Upstox Developer Apps → Analytics. Sanket stores it only in
+            this device&apos;s OS keyring. No OAuth flow or network validation is performed here.
+          </p>
+          <form onSubmit={saveToken}>
+            <label htmlFor="upstox-token">Upstox Analytics Token</label>
+            <input
+              id="upstox-token"
+              type="password"
+              autoComplete="off"
+              maxLength={4096}
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              disabled={busy}
+            />
+            <div className="provider-actions">
+              <button className="primary-button" type="submit" disabled={busy || !token.trim()}>
+                {connected ? "Replace Upstox" : "Connect Upstox"}
+              </button>
+              {connected && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void disconnectProvider()}
+                  disabled={busy}
+                >
+                  Disconnect
+                </button>
+              )}
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => void loadStatus()}
+                disabled={busy}
+              >
+                Refresh status
+              </button>
+            </div>
+          </form>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          {status?.safe_message && status.state === "FAILED" && (
+            <p className="form-error" role="alert">
+              {status.safe_message}
+            </p>
+          )}
+          <p className="provider-boundary-note">
+            Token values are never returned to the app UI, stored in SQLite, or sent to Upstox in
+            this phase.
+          </p>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2414,6 +2567,7 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
         />
       )}
       {view === "allotment" && <AllotmentView bridge={bridge} members={members} />}
+      {view === "settings" && <SettingsView bridge={bridge} />}
     </AppShell>
   );
 }

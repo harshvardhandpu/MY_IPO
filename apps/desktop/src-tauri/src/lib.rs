@@ -1,3 +1,4 @@
+pub mod provider_credentials;
 pub mod service;
 pub mod worker;
 
@@ -6,6 +7,10 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::Manager;
 
+use provider_credentials::{
+    ConnectUpstoxAnalyticsTokenRequest, OsProviderCredentialStore, ProviderConnectionStatusDto,
+    SecretValue, disconnect, status, store_token,
+};
 use service::{
     AddFriendRequest, AddFriendResponse, AllotmentCandidateRow, AllotmentJobReport, Application,
     CheckRequest, CheckResponse, Dashboard, EstimateProfitRequest, EstimatedProfitDto, FriendRow,
@@ -22,6 +27,7 @@ pub struct AppState {
     vault_root: PathBuf,
     index_path: PathBuf,
     worker: Option<worker::AllotmentWorkerHandle>,
+    provider_credentials: OsProviderCredentialStore,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -57,6 +63,7 @@ impl AppState {
             vault_root,
             index_path,
             worker: None,
+            provider_credentials: OsProviderCredentialStore,
         }
     }
 
@@ -273,6 +280,36 @@ fn get_security_status(state: tauri::State<'_, AppState>) -> Result<SecurityStat
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_upstox_connection_status(state: tauri::State<'_, AppState>) -> ProviderConnectionStatusDto {
+    status(&state.provider_credentials)
+}
+
+#[tauri::command]
+fn connect_upstox_analytics_token(
+    state: tauri::State<'_, AppState>,
+    mut request: ConnectUpstoxAnalyticsTokenRequest,
+) -> ProviderConnectionStatusDto {
+    let token = std::mem::take(&mut request.token);
+    request.token.clear();
+    store_token(&state.provider_credentials, SecretValue::new(token))
+}
+
+#[tauri::command]
+fn replace_upstox_analytics_token(
+    state: tauri::State<'_, AppState>,
+    mut request: ConnectUpstoxAnalyticsTokenRequest,
+) -> ProviderConnectionStatusDto {
+    let token = std::mem::take(&mut request.token);
+    request.token.clear();
+    store_token(&state.provider_credentials, SecretValue::new(token))
+}
+
+#[tauri::command]
+fn disconnect_upstox(state: tauri::State<'_, AppState>) -> ProviderConnectionStatusDto {
+    disconnect(&state.provider_credentials)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -317,7 +354,11 @@ pub fn run() {
             cancel_allotment_job,
             record_manual_allotment,
             estimate_profit,
-            get_security_status
+            get_security_status,
+            get_upstox_connection_status,
+            connect_upstox_analytics_token,
+            replace_upstox_analytics_token,
+            disconnect_upstox
         ])
         .run(tauri::generate_context!())
         .expect("Sanket IPO desktop runtime failed");
