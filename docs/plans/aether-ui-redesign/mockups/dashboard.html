@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sanket IPO - Aether Dashboard Direction</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #0c1016;
+      --sidebar: #111720;
+      --surface: #151c25;
+      --surface-raised: #1a222d;
+      --surface-subtle: #10161e;
+      --border: #293442;
+      --border-strong: #3a4859;
+      --text: #edf2f7;
+      --muted: #95a2b1;
+      --faint: #677587;
+      --accent: #6ea8fe;
+      --accent-strong: #8bb9ff;
+      --positive: #63c99c;
+      --warning: #e2b765;
+      --danger: #ef7d72;
+      --unknown: #a7a0d8;
+      --r-control: 6px;
+      --r-panel: 10px;
+      font-family: "Segoe UI Variable", "SF Pro Text", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 960px; background: var(--canvas); color: var(--text); }
+    button { font: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 224px 1fr; }
+    .sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; border-right: 1px solid var(--border); background: var(--sidebar); }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 16px; border-bottom: 1px solid var(--border); }
+    .mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; color: #09101a; background: var(--accent-strong); font-weight: 800; }
+    .brand strong, .brand span { display: block; }
+    .brand strong { font-size: 14px; }
+    .brand span { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .nav-label, .overline { margin: 0 8px 7px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    nav { display: grid; gap: 3px; }
+    .nav-item { width: 100%; min-height: 38px; display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: 9px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--r-control); color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+    .nav-item:hover { color: var(--text); background: var(--surface); }
+    .nav-item.active { color: var(--text); border-color: #36547a; background: #172338; box-shadow: inset 2px 0 0 var(--accent); }
+    .nav-icon { width: 20px; color: currentColor; font-size: 13px; text-align: center; }
+    .sidebar-bottom { margin-top: auto; display: grid; gap: 8px; }
+    .secure { padding: 10px; border: 1px solid var(--border); border-radius: var(--r-control); background: var(--surface-subtle); }
+    .secure strong, .secure span { display: block; }
+    .secure strong { color: var(--positive); font-size: 11px; }
+    .secure span { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .owner { display: flex; align-items: center; gap: 8px; padding: 8px; }
+    .avatar { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--border-strong); border-radius: 50%; color: var(--muted); font-size: 10px; }
+    .owner strong, .owner span { display: block; }
+    .owner strong { font-size: 11px; }
+    .owner span { color: var(--muted); font-size: 10px; }
+    main { min-width: 0; padding: 22px 28px 32px; }
+    .topbar { min-height: 48px; display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 27px; line-height: 1.25; letter-spacing: -.025em; }
+    .subtitle { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .top-actions { display: flex; gap: 8px; }
+    .button { min-height: 36px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: var(--r-control); color: var(--text); background: var(--surface-raised); font-weight: 650; cursor: pointer; }
+    .button:hover { border-color: var(--accent); }
+    .button.primary { border-color: #6ea8fe; color: #08101b; background: var(--accent-strong); }
+    .button small { display: block; margin-top: 1px; color: inherit; font-size: 9px; font-weight: 500; opacity: .75; }
+    .summary { display: grid; grid-template-columns: 1.35fr 1fr .8fr .8fr; border: 1px solid var(--border); border-radius: var(--r-panel); background: var(--surface); overflow: hidden; }
+    .metric { min-width: 0; padding: 15px 17px; border-right: 1px solid var(--border); }
+    .metric:last-child { border-right: 0; }
+    .metric span { display: block; color: var(--muted); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .045em; }
+    .metric strong { display: block; margin-top: 7px; font-variant-numeric: tabular-nums; font-size: 22px; line-height: 1; }
+    .metric small { display: block; margin-top: 7px; color: var(--faint); font-size: 10px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); gap: 14px; margin-top: 14px; }
+    .panel { border: 1px solid var(--border); border-radius: var(--r-panel); background: var(--surface); overflow: hidden; }
+    .panel-header { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 15px; border-bottom: 1px solid var(--border); }
+    .panel-header h2 { margin: 0; font-size: 14px; }
+    .panel-header span { color: var(--muted); font-size: 10px; }
+    .table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .table th { padding: 9px 13px; color: var(--faint); background: var(--surface-subtle); font-size: 9px; text-align: left; text-transform: uppercase; letter-spacing: .05em; }
+    .table td { padding: 12px 13px; border-top: 1px solid var(--border); color: var(--muted); vertical-align: middle; }
+    .table td:first-child { color: var(--text); font-weight: 650; }
+    .number { text-align: right !important; font-variant-numeric: tabular-nums; }
+    .status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border: 1px solid currentColor; border-radius: 4px; font-size: 9px; font-weight: 700; }
+    .status.pending { color: var(--warning); background: #2b2519; }
+    .empty-row td { padding: 22px 13px; color: var(--faint); text-align: center; }
+    .action-list { display: grid; }
+    .action { display: grid; grid-template-columns: 28px 1fr auto; gap: 9px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .action:last-child { border-bottom: 0; }
+    .action-glyph { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--accent); font-size: 13px; }
+    .action strong, .action span { display: block; }
+    .action strong { font-size: 11px; }
+    .action span { margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .action button { border: 0; color: var(--accent-strong); background: none; font-size: 16px; cursor: pointer; }
+    .decision { margin-top: 14px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: stretch; border: 1px solid var(--border); border-radius: var(--r-panel); background: var(--surface-subtle); overflow: hidden; }
+    .decision-part { padding: 14px 16px; }
+    .decision-part strong { display: block; font-size: 12px; }
+    .decision-part p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .decision-arrow { display: grid; place-items: center; width: 40px; border-left: 1px solid var(--border); border-right: 1px solid var(--border); color: var(--faint); }
+    .record { background: #141d2b; }
+    .fineprint { margin: 12px 2px 0; color: var(--faint); font-size: 9px; }
+    @media (max-width: 1080px) {
+      body { min-width: 760px; }
+      .shell { grid-template-columns: 190px 1fr; }
+      main { padding-inline: 20px; }
+      .summary { grid-template-columns: 1fr 1fr; }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+      .workspace { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .button, .nav-item { transition: color 120ms ease, background 120ms ease, border-color 120ms ease; }
+      .button:active { transform: translateY(1px); }
+    }
+    :focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="mark">S</div><div><strong>Sanket IPO</strong><span>Private investment ledger</span></div></div>
+      <div>
+        <p class="nav-label">Workspace</p>
+        <nav aria-label="Primary navigation">
+          <button class="nav-item active"><span class="nav-icon">▦</span><span>Dashboard</span></button>
+          <button class="nav-item"><span class="nav-icon">◎</span><span>Members</span></button>
+          <button class="nav-item"><span class="nav-icon">₹</span><span>Investments</span></button>
+          <button class="nav-item"><span class="nav-icon">✓</span><span>Check Allotment</span></button>
+        </nav>
+      </div>
+      <div class="sidebar-bottom">
+        <div class="secure"><strong>LOCAL VAULT SECURED</strong><span>Masked identities only. OS keyring boundary intact.</span></div>
+        <div class="owner"><div class="avatar">OW</div><div><strong>Owner workspace</strong><span>1 encrypted profile</span></div></div>
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div><h1>Dashboard</h1><p class="subtitle">Capital, applications, and registrar work in one private ledger.</p></div>
+        <div class="top-actions">
+          <button class="button">Check allotment<small>Registrar workflow</small></button>
+          <button class="button primary">Invest<small>Preview, edit, record</small></button>
+        </div>
+      </header>
+
+      <section class="summary" aria-label="Portfolio summary">
+        <div class="metric"><span>Total invested</span><strong>₹0</strong><small>No submitted investment sessions</small></div>
+        <div class="metric"><span>Realized profit</span><strong>₹0</strong><small>Only recorded allotment outcomes</small></div>
+        <div class="metric"><span>Applications</span><strong>0</strong><small>Current and historical records</small></div>
+        <div class="metric"><span>Accounts</span><strong>1</strong><small>Encrypted owner profile</small></div>
+      </section>
+
+      <section class="workspace">
+        <article class="panel">
+          <header class="panel-header"><h2>Current activity</h2><span>Application queue</span></header>
+          <table class="table">
+            <thead><tr><th>IPO</th><th>Registrar</th><th>Status</th><th class="number">Amount</th><th>Last checked</th></tr></thead>
+            <tbody><tr class="empty-row"><td colspan="5">No submitted applications. Start an investment or add a historical record.</td></tr></tbody>
+          </table>
+        </article>
+        <aside class="panel">
+          <header class="panel-header"><h2>Quick actions</h2><span>Owner controls</span></header>
+          <div class="action-list">
+            <div class="action"><div class="action-glyph">₹</div><div><strong>New investment</strong><span>Build a recommendation, review it, then record the human decision.</span></div><button aria-label="Open new investment">›</button></div>
+            <div class="action"><div class="action-glyph">H</div><div><strong>Historical application</strong><span>Owner-entered record. No registrar lookup and no inferred result.</span></div><button aria-label="Open historical application">›</button></div>
+            <div class="action"><div class="action-glyph">✓</div><div><strong>Check allotment</strong><span>Run a provider-aware check for a submitted application.</span></div><button aria-label="Open allotment check">›</button></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="decision" aria-label="Investment decision boundary">
+        <div class="decision-part"><strong>CHECK: recommendation preview</strong><p>Uses approved non-secret inputs. Nothing is recorded as an investment decision.</p></div>
+        <div class="decision-arrow">→</div>
+        <div class="decision-part record"><strong>SUBMIT: record investment</strong><p>Persists the human-selected accounts and amounts into the private event ledger.</p></div>
+      </section>
+      <p class="fineprint">Aether direction preview. Values reflect the current empty-ledger state and do not invent financial performance.</p>
+    </main>
+  </div>
+</body>
+</html>

@@ -171,21 +171,67 @@ function formatRupees(paise: number): string {
   }).format(paise / 100);
 }
 
-function allotmentStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    ALLOTTED: "Allotted",
-    NOT_ALLOTTED: "Not Allotted",
-    NOT_FOUND: "Not Found",
-    NEEDS_HUMAN_VERIFICATION: "Verification Required",
-    PROVIDER_UNAVAILABLE: "Provider Unavailable",
-    RETRYABLE_ERROR: "Retry Required",
-    RATE_LIMITED: "Rate Limited",
-    UNKNOWN: "Unknown",
-    PENDING: "Pending",
-    CANCELLED: "Cancelled",
-    MANUAL_RESULT: "Manual Result",
+type StatusTone = "positive" | "negative" | "warning" | "info" | "unknown";
+
+type StatusPresentation = {
+  label: string;
+  glyph: string;
+  tone: StatusTone;
+};
+
+function statusPresentation(status: string): StatusPresentation {
+  const presentations: Record<string, StatusPresentation> = {
+    ALLOTTED: { label: "Allotted", glyph: "✓", tone: "positive" },
+    NOT_ALLOTTED: { label: "Not Allotted", glyph: "−", tone: "unknown" },
+    NOT_FOUND: { label: "Not Found", glyph: "?", tone: "warning" },
+    NEEDS_HUMAN_VERIFICATION: {
+      label: "Verification Required",
+      glyph: "!",
+      tone: "warning",
+    },
+    PROVIDER_UNAVAILABLE: { label: "Provider Unavailable", glyph: "!", tone: "warning" },
+    RETRYABLE_ERROR: { label: "Retry Required", glyph: "↻", tone: "warning" },
+    RATE_LIMITED: { label: "Rate Limited", glyph: "!", tone: "warning" },
+    UNKNOWN: { label: "Unknown", glyph: "?", tone: "unknown" },
+    UNCONFIRMED: { label: "Unconfirmed", glyph: "?", tone: "unknown" },
+    PENDING: { label: "Pending", glyph: "○", tone: "info" },
+    QUEUED: { label: "Queued", glyph: "○", tone: "info" },
+    RUNNING: { label: "Running", glyph: "↻", tone: "info" },
+    READY: { label: "Ready to check", glyph: "○", tone: "info" },
+    NONE: { label: "Ready to check", glyph: "○", tone: "info" },
+    COMPLETE: { label: "Complete", glyph: "✓", tone: "positive" },
+    COMPLETE_WITH_UNCONFIRMED: {
+      label: "Complete with unconfirmed results",
+      glyph: "!",
+      tone: "warning",
+    },
+    PARTIALLY_COMPLETE: { label: "Partially Complete", glyph: "◐", tone: "warning" },
+    CANCELLED: { label: "Cancelled", glyph: "×", tone: "negative" },
+    FAILED: { label: "Failed", glyph: "×", tone: "negative" },
+    MANUAL_RESULT: { label: "Manual Result", glyph: "M", tone: "unknown" },
+    MANUAL_FALLBACK_REQUIRED: {
+      label: "Manual fallback required",
+      glyph: "M",
+      tone: "warning",
+    },
   };
-  return labels[status] ?? status.replaceAll("_", " ").toLowerCase();
+  return (
+    presentations[status] ?? {
+      label: status.replaceAll("_", " ").toLowerCase(),
+      glyph: "•",
+      tone: "unknown",
+    }
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const presentation = statusPresentation(status);
+  return (
+    <span className={`status-badge ${presentation.tone}`}>
+      <span aria-hidden="true">{presentation.glyph}</span>
+      <span>{presentation.label}</span>
+    </span>
+  );
 }
 
 function Mark() {
@@ -193,14 +239,6 @@ function Mark() {
     <span className="brand-mark" aria-hidden="true">
       S
     </span>
-  );
-}
-
-function ArrowIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="m5 12 14 0M13 6l6 6-6 6" />
-    </svg>
   );
 }
 
@@ -215,11 +253,11 @@ function AppShell({
   children: React.ReactNode;
   memberCount: number;
 }) {
-  const items: Array<{ label: string; view: View }> = [
-    { label: "Dashboard", view: "dashboard" },
-    { label: "Members", view: "members" },
-    { label: "Investments", view: "invest" },
-    { label: "Allotment", view: "allotment" },
+  const items: Array<{ label: string; view: View; glyph: string }> = [
+    { label: "Dashboard", view: "dashboard", glyph: "▦" },
+    { label: "Members", view: "members", glyph: "◎" },
+    { label: "Investments", view: "invest", glyph: "₹" },
+    { label: "Check Allotment", view: "allotment", glyph: "✓" },
   ];
 
   return (
@@ -229,21 +267,22 @@ function AppShell({
           <Mark />
           <div>
             <strong>Sanket IPO</strong>
-            <span>Private group OS</span>
+            <span>Private investment ledger</span>
           </div>
         </div>
         <nav aria-label="Primary navigation">
-          <p className="eyebrow">Private workspace</p>
+          <p className="nav-label">Workspace</p>
           <ul>
             {items.map((item) => (
               <li key={item.label}>
                 <button
+                  aria-current={active === item.view ? "page" : undefined}
                   className={active === item.view ? "nav-item active" : "nav-item"}
                   onClick={() => setActive(item.view)}
                   type="button"
                 >
-                  <span className="nav-index" aria-hidden="true">
-                    0{items.indexOf(item) + 1}
+                  <span className="nav-glyph" aria-hidden="true">
+                    {item.glyph}
                   </span>
                   {item.label}
                 </button>
@@ -251,36 +290,35 @@ function AppShell({
             ))}
           </ul>
         </nav>
-        <div className="privacy-card">
-          <span className="privacy-indicator" aria-hidden="true" />
-          <div>
-            <strong>Private domain locked</strong>
-            <span>PAN and UPI stay in the encrypted local vault.</span>
+        <div className="sidebar-footer">
+          <div className="privacy-card">
+            <strong>Local identity protected</strong>
+            <span>Only masked PAN is shown outside the encrypted vault.</span>
+          </div>
+          <div className="profile-button">
+            <span className="avatar" aria-hidden="true">
+              {memberCount || "0"}
+            </span>
+            <span>
+              <strong>
+                {memberCount
+                  ? `${memberCount} private profile${memberCount > 1 ? "s" : ""}`
+                  : "No profile"}
+              </strong>
+              <small>Saved on this device</small>
+            </span>
           </div>
         </div>
-        <div className="profile-button">
-          <span className="avatar" aria-hidden="true">
-            {memberCount || "—"}
-          </span>
-          <span>
-            <strong>
-              {memberCount
-                ? `${memberCount} private profile${memberCount > 1 ? "s" : ""}`
-                : "No profile"}
-            </strong>
-            <small>Saved on this device</small>
-          </span>
-        </div>
       </aside>
-      <main>
+      <main className="app-main">
         <header className="topbar">
-          <div>
+          <div className="topbar-status">
             <span className="saved-status">
               <span aria-hidden="true" /> Saved locally
             </span>
             <span className="sync-status">Pending sync</span>
           </div>
-          <span className="topbar-seal">PRIVATE · LOCAL · AUDITED</span>
+          <span className="topbar-seal">PRIVATE / LOCAL / AUDITED</span>
         </header>
         {children}
       </main>
@@ -383,6 +421,10 @@ function Onboarding({
       </section>
       <form className="form-panel onboarding-form" onSubmit={submit}>
         <p className="eyebrow">Owner profile</p>
+        <div className="security-strip ready" role="status">
+          <strong>Protected identity fields</strong>
+          <span>PAN and UPI go directly to the local Rust vault and never to AI requests.</span>
+        </div>
         <div className="form-grid two-column">
           <label>
             Full name
@@ -439,7 +481,11 @@ function Onboarding({
             I understand PAN and UPI are encrypted locally and never included in AI requests.
           </span>
         </label>
-        {error && <p className="inline-error">{error}</p>}
+        {error && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
         <button className="primary-button" disabled={busy} type="submit">
           {busy ? "Creating encrypted profile…" : "Create private profile"}
         </button>
@@ -449,116 +495,194 @@ function Onboarding({
 }
 
 function DashboardView({
+  bridge,
   dashboard,
   onInvest,
   onAllotment,
 }: {
+  bridge: CommandBridge;
   dashboard: DashboardData;
   onInvest: () => void;
   onAllotment: () => void;
 }) {
+  const [activity, setActivity] = useState<AllotmentCandidate[]>([]);
+  const [activityError, setActivityError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    bridge
+      .invoke<AllotmentCandidate[]>("list_allotment_candidates")
+      .then((rows) => {
+        if (active) setActivity(rows);
+      })
+      .catch(() => {
+        if (active) setActivityError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [bridge]);
+
   const metrics = [
     {
-      label: "Group investment",
+      label: "Total invested",
       value: formatRupees(dashboard.total_planned_paise),
       detail: `${dashboard.submitted_session_count} submitted session${dashboard.submitted_session_count === 1 ? "" : "s"}`,
     },
     {
-      label: "Group net profit",
+      label: "Realized profit",
       value: formatRupees(dashboard.profit_paise),
-      detail: "Available after allotment records",
+      detail: "Only recorded allotment outcomes",
     },
     {
-      label: "Core members",
-      value: String(dashboard.member_count),
-      detail: "Encrypted identity profiles",
+      label: "Applications",
+      value: String(activity.length),
+      detail: "Submitted records available to check",
     },
     {
-      label: "Active friend accounts",
-      value: String(dashboard.friend_count),
-      detail: "Archive instead of delete",
+      label: "Accounts",
+      value: String(dashboard.member_count + dashboard.friend_count),
+      detail: `${dashboard.member_count} core / ${dashboard.friend_count} friend`,
     },
   ];
 
   return (
     <div className="dashboard page-content">
-      <section className="hero" aria-labelledby="dashboard-heading">
+      <header className="page-heading dashboard-heading">
         <div>
-          <p className="eyebrow">Group overview · projection-backed</p>
-          <h1 id="dashboard-heading">Every rupee, account, and decision in one private ledger.</h1>
-          <p className="hero-copy">
-            Plan locally, review a clearly labeled development recommendation, then submit the human
-            decision as immutable events.
-          </p>
+          <h1>Dashboard</h1>
+          <p>Capital, applications, and registrar work in one private ledger.</p>
         </div>
-        <div className="quick-actions" aria-label="Quick actions">
-          <button aria-label="Invest" className="primary-action" onClick={onInvest} type="button">
-            <span>Invest</span>
-            <small>CHECK, edit, then submit</small>
-            <ArrowIcon />
-          </button>
+        <fieldset className="quick-actions" aria-label="Quick actions">
           <button
             aria-label="Check Allotment"
-            className="secondary-action"
+            className="secondary-button action-with-note"
             onClick={onAllotment}
             type="button"
           >
-            <span>Check Allotment</span>
-            <small>Fixture registrar · purpose-scoped PAN</small>
-            <ArrowIcon />
+            <span>Check allotment</span>
+            <small>Registrar workflow</small>
           </button>
-        </div>
-      </section>
-      <section className="metric-grid" aria-label="Group metrics">
+          <button
+            aria-label="Invest"
+            className="primary-button action-with-note"
+            onClick={onInvest}
+            type="button"
+          >
+            <span>Invest</span>
+            <small>Preview, edit, record</small>
+          </button>
+        </fieldset>
+      </header>
+
+      <section className="summary-strip" aria-label="Portfolio summary">
         {metrics.map((metric) => (
-          <article className="metric-card" key={metric.label}>
-            <p>{metric.label}</p>
+          <div className="summary-metric" key={metric.label}>
+            <span>{metric.label}</span>
             <strong>{metric.value}</strong>
-            <span>{metric.detail}</span>
-          </article>
+            <small>{metric.detail}</small>
+          </div>
         ))}
       </section>
-      <section className="content-grid">
-        <article className="panel capital-rail-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Decision rail</p>
-              <h2>Local investment workflow</h2>
-            </div>
-          </div>
-          <ol className="decision-rail">
-            <li>
-              <span>01</span>
-              <strong>CHECK</strong>
-              <p>Build the approved multi-IPO request. No private identity fields.</p>
-            </li>
-            <li>
-              <span>02</span>
-              <strong>EDIT</strong>
-              <p>Keep the human in control of accounts and planned amounts.</p>
-            </li>
-            <li>
-              <span>03</span>
-              <strong>SUBMIT</strong>
-              <p>Persist events and rebuildable local projections.</p>
-            </li>
-          </ol>
-        </article>
+
+      <section className="dashboard-grid">
         <article className="panel activity-panel">
-          <div className="panel-heading">
+          <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Status</p>
-              <h2>Private foundation</h2>
+              <h2>Current activity</h2>
+              <p>Application queue</p>
+            </div>
+            <span>{activity.length} records</span>
+          </div>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>IPO</th>
+                  <th>Registrar</th>
+                  <th>Status</th>
+                  <th className="numeric">Amount</th>
+                  <th>Last checked</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activity.map((candidate) => (
+                  <tr key={candidate.application_id}>
+                    <th scope="row">{candidate.ipo_name}</th>
+                    <td>{candidate.registrar_name}</td>
+                    <td>
+                      <StatusBadge status={candidate.overall_job_state} />
+                    </td>
+                    <td className="numeric">{formatRupees(candidate.planned_amount_paise)}</td>
+                    <td>{candidate.last_checked ?? "Not checked"}</td>
+                  </tr>
+                ))}
+                {activity.length === 0 && (
+                  <tr className="table-empty">
+                    <td colSpan={5}>
+                      {activityError
+                        ? "Application activity is unavailable. Core ledger totals remain available."
+                        : "No submitted applications. Start an investment or add a historical record."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <aside className="panel quick-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <h2>Quick actions</h2>
+              <p>Owner controls</p>
             </div>
           </div>
-          <div className="activity-empty">
-            <span className="activity-glyph" aria-hidden="true">
+          <button className="quick-row" onClick={onInvest} type="button">
+            <span className="quick-glyph" aria-hidden="true">
+              ₹
+            </span>
+            <span>
+              <strong>New investment</strong>
+              <small>Preview a recommendation, then record the decision.</small>
+            </span>
+            <span aria-hidden="true">›</span>
+          </button>
+          <button className="quick-row" onClick={onInvest} type="button">
+            <span className="quick-glyph" aria-hidden="true">
+              H
+            </span>
+            <span>
+              <strong>Historical application</strong>
+              <small>Owner-entered fact with no inferred result.</small>
+            </span>
+            <span aria-hidden="true">›</span>
+          </button>
+          <button className="quick-row" onClick={onAllotment} type="button">
+            <span className="quick-glyph" aria-hidden="true">
               ✓
             </span>
-            <strong>Local-first core ready</strong>
-            <p>Submitted investment sessions now feed the dashboard from SQLite projections.</p>
-          </div>
-        </article>
+            <span>
+              <strong>Check allotment</strong>
+              <small>Continue through the mapped registrar workflow.</small>
+            </span>
+            <span aria-hidden="true">›</span>
+          </button>
+        </aside>
+      </section>
+
+      <section className="decision-boundary" aria-label="Investment decision boundary">
+        <div>
+          <strong>CHECK: recommendation preview</strong>
+          <p>Uses approved non-secret inputs. It does not record an investment decision.</p>
+        </div>
+        <span className="decision-arrow" aria-hidden="true">
+          →
+        </span>
+        <div className="record-boundary">
+          <strong>SUBMIT: record investment</strong>
+          <p>Persists the human-selected accounts and amounts into the private event ledger.</p>
+        </div>
       </section>
     </div>
   );
@@ -633,6 +757,8 @@ function MembersView({
           <p>Only masked identity metadata is visible outside the encrypted vault.</p>
         </div>
         <button
+          aria-controls="friend-account-form"
+          aria-expanded={adding}
           className="primary-button"
           onClick={() => setAdding((value) => !value)}
           type="button"
@@ -642,7 +768,11 @@ function MembersView({
       </section>
 
       {adding && (
-        <form className="form-panel friend-form" onSubmit={submit}>
+        <form className="form-panel friend-form" id="friend-account-form" onSubmit={submit}>
+          <div className="security-strip ready" role="status">
+            <strong>Encrypted intake</strong>
+            <span>Plaintext identity is accepted only for this local vault operation.</span>
+          </div>
           <div className="form-grid four-column">
             <label>
               Friend name
@@ -687,7 +817,11 @@ function MembersView({
             />
             <span>Eligible for 10% profit share</span>
           </label>
-          {error && <p className="inline-error">{error}</p>}
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
           <button className="primary-button" type="submit">
             Encrypt and add friend
           </button>
@@ -801,6 +935,10 @@ function HistoricalApplicationForm({
           <p className="eyebrow">Owner historical entry</p>
           <h1>Add historical application</h1>
           <p>Records an owner-affirmed fact. It does not contact the registrar or set a result.</p>
+          <span className="status-badge history">
+            <span aria-hidden="true">H</span>
+            Owner entered / no registrar lookup
+          </span>
         </div>
         <button className="secondary-button" type="button" onClick={onCancel}>
           Back to current investment
@@ -869,8 +1007,16 @@ function HistoricalApplicationForm({
         <p>
           Source: <code>OWNER_HISTORICAL_ENTRY</code> · Automated result: Not yet checked
         </p>
-        {message && <p className="success-message">{message}</p>}
-        {error && <p className="error-message">{error}</p>}
+        {message && (
+          <p className="success-message" role="status">
+            {message}
+          </p>
+        )}
+        {error && (
+          <p className="error-message" role="alert">
+            {error}
+          </p>
+        )}
         <button className="primary-button" type="submit" disabled={saving || !owner}>
           {saving ? "Saving…" : "Save historical application"}
         </button>
@@ -1151,7 +1297,11 @@ function InvestView({
               )}
             </div>
           </fieldset>
-          {error && <p className="inline-error">{error}</p>}
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
         </div>
 
         <aside className="recommendation-panel" aria-live="polite">
@@ -1189,11 +1339,15 @@ function InvestView({
               </ol>
             </div>
           )}
-          {message && <p className="success-message">{message}</p>}
+          {message && (
+            <p className="success-message" role="status">
+              {message}
+            </p>
+          )}
         </aside>
       </section>
 
-      <footer className="action-rail" aria-label="Investment actions">
+      <fieldset className="action-rail" aria-label="Investment actions">
         <div>
           <span className={recommendation ? "rail-step complete" : "rail-step active"}>
             01 CHECK
@@ -1227,7 +1381,7 @@ function InvestView({
             SUBMIT
           </button>
         </div>
-      </footer>
+      </fieldset>
     </div>
   );
 }
@@ -1326,13 +1480,17 @@ function ProfitEditor({
         Save estimate basis
       </button>
       {result && (
-        <p className="inline-ok">
+        <p className="inline-ok" role="status">
           {result.estimated_profit_paise == null
-            ? "Estimate unavailable — no price was invented."
+            ? "Estimate unavailable: no price was invented."
             : `${formatRupees(result.estimated_profit_paise)} estimated · ${result.basis}`}
         </p>
       )}
-      {error && <p className="inline-error">{error}</p>}
+      {error && (
+        <p className="inline-error" role="alert">
+          {error}
+        </p>
+      )}
     </details>
   );
 }
@@ -1471,8 +1629,16 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
             </span>
           </div>
         )}
-        {error && <p className="inline-error">{error}</p>}
-        {message && <p className="inline-ok">{message}</p>}
+        {error && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
+        {message && (
+          <p className="inline-ok" role="status">
+            {message}
+          </p>
+        )}
         <div className="stack-list">
           {candidates.length === 0 && (
             <p>No submitted IPO applications yet. Submit an investment first.</p>
@@ -1493,10 +1659,13 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                   {c.account_count === 1 ? "" : "s"} · {formatRupees(c.planned_amount_paise)}{" "}
                   planned · {c.overall_job_state.replaceAll("_", " ").toLowerCase()}
                 </small>
+                <StatusBadge status={c.overall_job_state} />
                 {c.provider_health === "HUMAN_VERIFICATION_REQUIRED" && (
-                  <span>Verification required</span>
+                  <StatusBadge status="NEEDS_HUMAN_VERIFICATION" />
                 )}
-                {c.provider_id === "unsupported" && <span>Manual fallback required</span>}
+                {c.provider_id === "unsupported" && (
+                  <StatusBadge status="MANUAL_FALLBACK_REQUIRED" />
+                )}
               </span>
             </label>
           ))}
@@ -1535,10 +1704,13 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
               <p>
                 {report.registrar_name} · {report.provider_id}
               </p>
-              <p>
-                {report.status === "PARTIALLY_COMPLETE"
-                  ? `Partially complete · ${report.final_count} of ${report.accounts.length} final`
-                  : `${allotmentStatusLabel(report.status)} · ${report.final_count} of ${report.accounts.length} final`}
+              <p className="report-status">
+                <StatusBadge status={report.status} />
+                <span>
+                  {report.status === "PARTIALLY_COMPLETE"
+                    ? `Partially complete · ${report.final_count} of ${report.accounts.length} final`
+                    : `${report.final_count} of ${report.accounts.length} final`}
+                </span>
               </p>
             </div>
           </div>
@@ -1548,7 +1720,7 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                 <strong>
                   {row.display_name} · {row.account_kind}
                 </strong>
-                <span>{allotmentStatusLabel(row.status)}</span>
+                <StatusBadge status={row.status} />
                 <small>
                   {row.masked_pan} · {row.source} · {row.provenance}
                   {row.allotted_lots != null ? ` · ${row.allotted_lots} lot(s)` : ""}
@@ -1703,9 +1875,12 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
 
   return (
     <AppShell active={view} memberCount={members.length + friends.length} setActive={setView}>
-      {boot === "loading" && <div className="loading-bar" aria-label="Loading local vault" />}
+      {boot === "loading" && (
+        <div className="loading-bar" aria-label="Loading local vault" role="progressbar" />
+      )}
       {view === "dashboard" && (
         <DashboardView
+          bridge={bridge}
           dashboard={dashboard}
           onAllotment={() => setView("allotment")}
           onInvest={() => setView("invest")}

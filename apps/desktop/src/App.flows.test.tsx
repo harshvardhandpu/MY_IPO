@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App, type CommandBridge } from "./App";
 
@@ -49,6 +49,7 @@ describe("functional desktop flows", () => {
     expect(
       await screen.findByRole("heading", { name: "Set up the private member vault" }),
     ).toBeVisible();
+    expect(screen.getByText("Protected identity fields")).toBeVisible();
 
     fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Owner" } });
     fireEvent.change(screen.getByLabelText("Email"), {
@@ -252,17 +253,25 @@ describe("functional desktop flows", () => {
     });
 
     render(<App bridge={bridge} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Check Allotment" }));
+    const navigation = await screen.findByRole("navigation", { name: "Primary navigation" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "Check Allotment" }));
 
     expect(await screen.findByText("Bigshare Services")).toBeVisible();
     expect(screen.queryByLabelText("Provider mode")).not.toBeInTheDocument();
-    expect(screen.getByText("Verification required")).toBeVisible();
+    expect(screen.getByText("Verification Required")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Check All Accounts" }));
 
     expect(await screen.findByRole("heading", { name: "Example IPO" })).toBeVisible();
     expect(screen.getByText("Partially complete · 1 of 2 final")).toBeVisible();
-    expect(screen.getByText("Allotted")).toBeVisible();
-    expect(screen.getByText("Verification Required")).toBeVisible();
+    const reportCard = screen.getByLabelText("Allotment report card");
+    expect(within(reportCard).getByText("Allotted")).toBeVisible();
+    expect(within(reportCard).getByText("Allotted").closest(".status-badge")).toHaveTextContent(
+      "✓Allotted",
+    );
+    expect(within(reportCard).getByText("Verification Required")).toBeVisible();
+    expect(
+      within(reportCard).getByText("Verification Required").closest(".status-badge"),
+    ).toHaveTextContent("!Verification Required");
     expect(screen.getByRole("button", { name: "Continue Verification for Friend" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Open Official Page" })).toHaveAttribute(
       "href",
@@ -295,6 +304,7 @@ describe("functional desktop flows", () => {
     render(<App bridge={bridge} />);
     fireEvent.click(await screen.findByRole("button", { name: "Invest" }));
     fireEvent.click(screen.getByRole("button", { name: "Add historical application" }));
+    expect(screen.getByText("Owner entered / no registrar lookup")).toBeVisible();
     fireEvent.change(screen.getByLabelText("Historical IPO name"), {
       target: { value: "Symbiotec Pharmalab Limited" },
     });
