@@ -34,10 +34,10 @@ fn created() -> EventEnvelope {
 }
 
 #[test]
-fn schema_v6_adds_durable_runtime_tables_without_pan_columns() {
+fn schema_v7_adds_durable_runtime_tables_without_pan_columns() {
     let dir = tempfile::tempdir().unwrap();
     let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
-    assert_eq!(index.schema_version().unwrap(), 6);
+    assert_eq!(index.schema_version().unwrap(), 7);
     for table in [
         "provider_issue_mappings",
         "provider_health",
@@ -54,6 +54,15 @@ fn schema_v6_adds_durable_runtime_tables_without_pan_columns() {
             "{table} may not contain PAN"
         );
     }
+    let application_columns = index.columns("applications").unwrap();
+    for required in ["source", "application_date", "created_at"] {
+        assert!(application_columns.iter().any(|column| column == required));
+    }
+    assert!(
+        !application_columns
+            .iter()
+            .any(|column| column.contains("pan"))
+    );
 }
 
 #[test]

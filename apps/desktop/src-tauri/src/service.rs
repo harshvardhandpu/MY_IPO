@@ -160,6 +160,34 @@ fn reject_embedded_pan(field: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_valid_iso_date(value: &str) -> bool {
+    let mut parts = value.split('-');
+    let (Some(year), Some(month), Some(day), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) = (
+        year.parse::<u32>(),
+        month.parse::<u32>(),
+        day.parse::<u32>(),
+    ) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=max_day).contains(&day)
+}
+
 impl Application {
     pub fn new(device_id: String, vault_root: PathBuf, index_path: PathBuf) -> Result<Self> {
         Self::with_mode(device_id, vault_root, index_path, resolve_security_mode())
@@ -547,6 +575,8 @@ impl Application {
                     registrar_name: registrar.registrar_name.into(),
                     official_status_url: Some(registrar.official_status_url.into()),
                     expected_allotment_date: ipo.expected_allotment_date.clone(),
+                    source: "OWNER_CURRENT_ENTRY".into(),
+                    application_date: None,
                 },
             })?);
 
@@ -600,6 +630,195 @@ impl Application {
         Ok(SubmitResponse {
             session_id,
             allocation_count: allocation_count as u32,
+        })
+    }
+
+    pub fn record_historical_application(
+        &self,
+        req: HistoricalApplicationRequest,
+    ) -> Result<HistoricalApplicationResponse> {
+        if !req.owner_affirmed {
+            return Err(ServiceError::Invalid(
+                "owner affirmation is required".to_owned(),
+            ));
+        }
+        if req.actor_member_id != req.account_id {
+            return Err(ServiceError::Invalid(
+                "historical applications must use the affirming owner account".to_owned(),
+            ));
+        }
+        let owner_exists = self
+            .index
+            .list_members()?
+            .into_iter()
+            .any(|(id, _, role, _)| id == req.account_id && role == "OWNER");
+        if !owner_exists {
+            return Err(ServiceError::Invalid(
+                "owner primary account was not found".to_owned(),
+            ));
+        }
+        if req.amount_paise <= 0 {
+            return Err(ServiceError::Invalid(
+                "historical application amount must be positive".to_owned(),
+            ));
+        }
+        let ipo_name = req.ipo_name.trim();
+        if ipo_name.is_empty() {
+            return Err(ServiceError::Invalid("IPO name is required".to_owned()));
+        }
+        reject_embedded_pan("IPO name", ipo_name)?;
+        reject_embedded_pan("provider issue id", &req.provider_issue_id)?;
+        if req.provider_issue_id.is_empty()
+            || req.provider_issue_id.len() > 32
+            || !req
+                .provider_issue_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        {
+            return Err(ServiceError::Invalid(
+                "provider issue id must contain 1 to 32 digits".to_owned(),
+            ));
+        }
+        if let Some(application_date) = req.application_date.as_deref() {
+            reject_embedded_pan("application date", application_date)?;
+            if !is_valid_iso_date(application_date) {
+                return Err(ServiceError::Invalid(
+                    "application date must be a real YYYY-MM-DD date".to_owned(),
+                ));
+            }
+        }
+        let registrar = sanket_allotment::ProviderRegistry::resolve_registrar(&req.registrar_id)
+            .ok_or_else(|| ServiceError::Invalid("unsupported registrar".into()))?;
+        let provider_id = execution_provider_id(self.security_mode, registrar.provider_id)
+            .as_str()
+            .to_owned();
+        if self.index.historical_application_exists(
+            &req.actor_member_id,
+            ipo_name,
+            &provider_id,
+            &req.provider_issue_id,
+        )? {
+            return Err(ServiceError::Invalid(
+                "this historical application already exists".to_owned(),
+            ));
+        }
+        let session_id = format!("history-{}", uuid::Uuid::now_v7());
+        let application_id = format!("{session_id}-app-0");
+        let allocation_id = format!("{application_id}-alloc-0");
+        let occurred_at = Self::now();
+
+        let mut session = InvestmentSession::open(
+            &session_id,
+            &req.actor_member_id,
+            Money::from_paise(req.amount_paise),
+        )?;
+        session.mark_submitted();
+        let events = [
+            EventEnvelope::seal(NewEvent {
+                event_id: String::new(),
+                aggregate_type: "session".into(),
+                aggregate_id: session_id.clone(),
+                aggregate_revision: 1,
+                actor_member_id: req.actor_member_id.clone(),
+                device_id: self.device_id.clone(),
+                occurred_at: occurred_at.clone(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                previous_event_hash: None,
+                payload: EventPayload::InvestmentSessionCreated {
+                    session_id: session_id.clone(),
+                    actor_member_id: req.actor_member_id.clone(),
+                    declared_capital_paise: req.amount_paise,
+                },
+            })?,
+            EventEnvelope::seal(NewEvent {
+                event_id: String::new(),
+                aggregate_type: "application".into(),
+                aggregate_id: application_id.clone(),
+                aggregate_revision: 1,
+                actor_member_id: req.actor_member_id.clone(),
+                device_id: self.device_id.clone(),
+                occurred_at: occurred_at.clone(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                previous_event_hash: None,
+                payload: EventPayload::IpoApplicationCreated {
+                    application_id: application_id.clone(),
+                    session_id: session_id.clone(),
+                    ipo_name: ipo_name.to_owned(),
+                    planned_amount_paise: req.amount_paise,
+                    registrar_id: registrar.registrar_id.into(),
+                    registrar_name: registrar.registrar_name.into(),
+                    official_status_url: Some(registrar.official_status_url.into()),
+                    expected_allotment_date: None,
+                    source: "OWNER_HISTORICAL_ENTRY".into(),
+                    application_date: req.application_date,
+                },
+            })?,
+            EventEnvelope::seal(NewEvent {
+                event_id: String::new(),
+                aggregate_type: "allocation".into(),
+                aggregate_id: allocation_id.clone(),
+                aggregate_revision: 1,
+                actor_member_id: req.actor_member_id.clone(),
+                device_id: self.device_id.clone(),
+                occurred_at: occurred_at.clone(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                previous_event_hash: None,
+                payload: EventPayload::AllocationAdded {
+                    allocation_id: allocation_id.clone(),
+                    application_id: application_id.clone(),
+                    account_id: req.account_id,
+                    amount_paise: req.amount_paise,
+                    share_basis_points: 1_000,
+                },
+            })?,
+            EventEnvelope::seal(NewEvent {
+                event_id: String::new(),
+                aggregate_type: "application".into(),
+                aggregate_id: application_id.clone(),
+                aggregate_revision: 2,
+                actor_member_id: req.actor_member_id.clone(),
+                device_id: self.device_id.clone(),
+                occurred_at: occurred_at.clone(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                previous_event_hash: None,
+                payload: EventPayload::AllotmentProviderDiscovered {
+                    application_id: application_id.clone(),
+                    registrar_id: registrar.registrar_id.into(),
+                    provider_id: provider_id.clone(),
+                    provider_issue_id: req.provider_issue_id.clone(),
+                    ipo_name: ipo_name.to_owned(),
+                    official_status_url: registrar.official_status_url.into(),
+                    last_verified_at: occurred_at.clone(),
+                },
+            })?,
+            EventEnvelope::seal(NewEvent {
+                event_id: String::new(),
+                aggregate_type: "session".into(),
+                aggregate_id: session_id.clone(),
+                aggregate_revision: 2,
+                actor_member_id: req.actor_member_id,
+                device_id: self.device_id.clone(),
+                occurred_at,
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                previous_event_hash: None,
+                payload: EventPayload::InvestmentSessionSubmitted {
+                    session_id: session_id.clone(),
+                    recommendation_id: None,
+                },
+            })?,
+        ];
+        for event in &events {
+            self.vault.append_event(event)?;
+            self.index.apply_event(event)?;
+        }
+
+        Ok(HistoricalApplicationResponse {
+            session_id,
+            application_id,
+            allocation_id,
+            provider_id,
+            provider_issue_id: req.provider_issue_id,
+            source: "OWNER_HISTORICAL_ENTRY".into(),
         })
     }
 
@@ -1721,6 +1940,28 @@ pub struct SubmitRequest {
 pub struct SubmitResponse {
     pub session_id: String,
     pub allocation_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HistoricalApplicationRequest {
+    pub actor_member_id: String,
+    pub account_id: String,
+    pub ipo_name: String,
+    pub amount_paise: i64,
+    pub application_date: Option<String>,
+    pub registrar_id: String,
+    pub provider_issue_id: String,
+    pub owner_affirmed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HistoricalApplicationResponse {
+    pub session_id: String,
+    pub application_id: String,
+    pub allocation_id: String,
+    pub provider_id: String,
+    pub provider_issue_id: String,
+    pub source: String,
 }
 
 #[derive(Debug, Serialize)]

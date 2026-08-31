@@ -270,4 +270,67 @@ describe("functional desktop flows", () => {
     );
     expect(screen.queryByText("ABCDE1234F")).not.toBeInTheDocument();
   });
+
+  it("records an owner-affirmed historical application without recommendation or lookup", async () => {
+    const bridge = bridgeWith({
+      list_members: () => [member],
+      list_friends: () => [],
+      get_dashboard: () => ({
+        total_planned_paise: 0,
+        submitted_session_count: 0,
+        member_count: 1,
+        friend_count: 0,
+        profit_paise: 0,
+      }),
+      record_historical_application: () => ({
+        session_id: "session-history-1",
+        application_id: "application-history-1",
+        allocation_id: "allocation-history-1",
+        provider_id: "mufg-intime-live",
+        provider_issue_id: "11926",
+        source: "OWNER_HISTORICAL_ENTRY",
+      }),
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Invest" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add historical application" }));
+    fireEvent.change(screen.getByLabelText("Historical IPO name"), {
+      target: { value: "Symbiotec Pharmalab Limited" },
+    });
+    fireEvent.change(screen.getByLabelText("Historical application amount (₹)"), {
+      target: { value: "14820" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider issue ID"), {
+      target: { value: "11926" },
+    });
+    fireEvent.change(screen.getByLabelText("Historical application account"), {
+      target: { value: "member-1" },
+    });
+    fireEvent.click(screen.getByLabelText(/I affirm this is a real historical application/i));
+    fireEvent.click(screen.getByRole("button", { name: "Save historical application" }));
+
+    await waitFor(() => {
+      expect(bridge.invoke).toHaveBeenCalledWith(
+        "record_historical_application",
+        expect.objectContaining({
+          request: {
+            actor_member_id: "member-1",
+            account_id: "member-1",
+            ipo_name: "Symbiotec Pharmalab Limited",
+            amount_paise: 1_482_000,
+            application_date: null,
+            registrar_id: "mufg_intime",
+            provider_issue_id: "11926",
+            owner_affirmed: true,
+          },
+        }),
+      );
+    });
+    expect(
+      await screen.findByText(/Historical application saved.*application-history-1/),
+    ).toBeVisible();
+    expect(bridge.invoke).not.toHaveBeenCalledWith("check_recommendation", expect.anything());
+    expect(bridge.invoke).not.toHaveBeenCalledWith("start_allotment_check", expect.anything());
+  });
 });

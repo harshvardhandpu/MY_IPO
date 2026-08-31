@@ -114,6 +114,8 @@ fn rebuild_session_and_allocations_from_events() {
                 registrar_name: "KFintech".into(),
                 official_status_url: Some("https://ipostatus.kfintech.com".into()),
                 expected_allotment_date: None,
+                source: "OWNER_CURRENT_ENTRY".into(),
+                application_date: None,
             },
         ),
         seal(

@@ -192,6 +192,15 @@ INSERT OR IGNORE INTO schema_migrations(version) VALUES (6);
 COMMIT;
 "#;
 
+const SCHEMA_V7: &str = r#"
+BEGIN;
+ALTER TABLE applications ADD COLUMN source TEXT NOT NULL DEFAULT 'OWNER_CURRENT_ENTRY';
+ALTER TABLE applications ADD COLUMN application_date TEXT;
+ALTER TABLE applications ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);
+COMMIT;
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
 }
@@ -311,6 +320,14 @@ impl LocalIndex {
         )?;
         if version < 6 {
             connection.execute_batch(SCHEMA_V6)?;
+        }
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if version < 7 {
+            connection.execute_batch(SCHEMA_V7)?;
         }
         Ok(Self { connection })
     }
@@ -512,19 +529,24 @@ impl LocalIndex {
                 registrar_name,
                 official_status_url,
                 expected_allotment_date,
+                source,
+                application_date,
             } => {
                 self.connection.execute(
                     "INSERT INTO applications(
                          id, session_id, ipo_name, planned_amount_paise, registrar_id,
-                         registrar_name, official_status_url, expected_allotment_date
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                         registrar_name, official_status_url, expected_allotment_date,
+                         source, application_date, created_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                      ON CONFLICT(id) DO UPDATE SET
                          ipo_name=excluded.ipo_name,
                          planned_amount_paise=excluded.planned_amount_paise,
                          registrar_id=excluded.registrar_id,
                          registrar_name=excluded.registrar_name,
                          official_status_url=excluded.official_status_url,
-                         expected_allotment_date=excluded.expected_allotment_date",
+                         expected_allotment_date=excluded.expected_allotment_date,
+                         source=excluded.source,
+                         application_date=excluded.application_date",
                     params![
                         application_id,
                         session_id,
@@ -533,7 +555,10 @@ impl LocalIndex {
                         registrar_id,
                         registrar_name,
                         official_status_url,
-                        expected_allotment_date
+                        expected_allotment_date,
+                        source,
+                        application_date,
+                        event.occurred_at()
                     ],
                 )?;
                 self.connection.execute(
@@ -917,6 +942,33 @@ impl LocalIndex {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    pub fn historical_application_exists(
+        &self,
+        actor_member_id: &str,
+        ipo_name: &str,
+        provider_id: &str,
+        provider_issue_id: &str,
+    ) -> Result<bool, LocalIndexError> {
+        let exists = self
+            .connection
+            .query_row(
+                "SELECT 1
+                 FROM applications a
+                 JOIN investment_sessions s ON s.id = a.session_id
+                 JOIN provider_issue_mappings p ON p.application_id = a.id
+                 WHERE s.actor_member_id = ?1
+                   AND lower(trim(a.ipo_name)) = lower(trim(?2))
+                   AND p.provider_id = ?3
+                   AND p.provider_issue_id = ?4
+                 LIMIT 1",
+                params![actor_member_id, ipo_name, provider_id, provider_issue_id],
+                |row| row.get::<_, u8>(0),
+            )
+            .optional()?
+            .is_some();
+        Ok(exists)
     }
 
     pub fn list_account_ids_for_application(

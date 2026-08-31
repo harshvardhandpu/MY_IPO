@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Add historical application</title>
+  <style>
+    body{font:16px system-ui;margin:0;background:#f4f1ea;color:#181713}.page{max-width:760px;margin:48px auto;padding:32px;background:#fff;border:1px solid #d9d3c7}.eyebrow{font-size:12px;letter-spacing:.14em}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}label{display:grid;gap:7px}input,select{padding:12px;border:1px solid #aaa;background:#fff}.full{grid-column:1/-1}.note{padding:14px;background:#f2eee4}.actions{display:flex;justify-content:flex-end;gap:12px;margin-top:24px}button{padding:12px 18px}.primary{background:#181713;color:#fff;border:0}@media(max-width:620px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow">OWNER HISTORICAL ENTRY</p>
+    <h1>Add historical application</h1>
+    <p>Record facts from an application made before Sanket IPO. Unknown optional fields may remain blank.</p>
+    <div class="grid">
+      <label class="full">IPO name <input value="Symbiotec Pharmalab Limited" /></label>
+      <label>Application amount (₹) <input value="14820" inputmode="decimal" /></label>
+      <label>Application date (optional) <input type="date" /></label>
+      <label>Registrar <select><option>MUFG Intime India</option></select></label>
+      <label>Account <select><option>Owner primary account · masked PAN</option></select></label>
+      <label class="full">Provider issue ID <input value="11926" readonly /></label>
+      <label class="full note"><span><input type="checkbox" /> I affirm this is a real historical application. Saving records it now and does not claim the original application was created today.</span></label>
+    </div>
+    <p class="note">Automated allotment result: Not yet checked. Saving does not contact MUFG.</p>
+    <div class="actions"><button>Cancel</button><button class="primary">Save historical application</button></div>
+  </main>
+</body>
+</html>

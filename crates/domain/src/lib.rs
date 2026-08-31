@@ -14,6 +14,10 @@ pub use money::{BasisPoints, BasisPointsError, Money};
 
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
 
+fn default_application_source() -> String {
+    "OWNER_CURRENT_ENTRY".to_owned()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Role {
@@ -89,6 +93,10 @@ pub enum EventPayload {
         official_status_url: Option<String>,
         #[serde(default)]
         expected_allotment_date: Option<String>,
+        #[serde(default = "default_application_source")]
+        source: String,
+        #[serde(default)]
+        application_date: Option<String>,
     },
     /// A final allocation was added (account-scoped; no PAN).
     AllocationAdded {

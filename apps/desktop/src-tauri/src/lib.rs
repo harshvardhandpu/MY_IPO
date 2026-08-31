@@ -9,8 +9,9 @@ use tauri::Manager;
 use service::{
     AddFriendRequest, AddFriendResponse, AllotmentCandidateRow, AllotmentJobReport, Application,
     CheckRequest, CheckResponse, Dashboard, EstimateProfitRequest, EstimatedProfitDto, FriendRow,
-    ManualAllotmentRequest, MemberRow, OnboardMemberRequest, OnboardMemberResponse,
-    SecurityStatusDto, StartAllotmentRequest, SubmitRequest, SubmitResponse,
+    HistoricalApplicationRequest, HistoricalApplicationResponse, ManualAllotmentRequest, MemberRow,
+    OnboardMemberRequest, OnboardMemberResponse, SecurityStatusDto, StartAllotmentRequest,
+    SubmitRequest, SubmitResponse,
 };
 
 #[derive(Clone, Debug)]
@@ -172,6 +173,17 @@ fn submit_investment(
 }
 
 #[tauri::command]
+fn record_historical_application(
+    state: tauri::State<'_, AppState>,
+    request: HistoricalApplicationRequest,
+) -> Result<HistoricalApplicationResponse, String> {
+    state
+        .application()?
+        .record_historical_application(request)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_dashboard(state: tauri::State<'_, AppState>) -> Result<Dashboard, String> {
     state.application()?.dashboard().map_err(|e| e.to_string())
 }
@@ -285,6 +297,7 @@ pub fn run() {
             list_friends,
             check_recommendation,
             submit_investment,
+            record_historical_application,
             get_dashboard,
             list_allotment_candidates,
             start_allotment_check,

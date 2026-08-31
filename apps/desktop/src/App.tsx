@@ -56,6 +56,15 @@ interface IpoDraft {
   included: boolean;
 }
 
+interface HistoricalApplicationResponse {
+  session_id: string;
+  application_id: string;
+  allocation_id: string;
+  provider_id: string;
+  provider_issue_id: string;
+  source: string;
+}
+
 type View = "dashboard" | "members" | "invest" | "allotment";
 type BootState = "loading" | "ready" | "offline";
 
@@ -728,6 +737,148 @@ function MembersView({
   );
 }
 
+function HistoricalApplicationForm({
+  bridge,
+  members,
+  onCancel,
+  onSubmitted,
+}: {
+  bridge: CommandBridge;
+  members: MemberRow[];
+  onCancel: () => void;
+  onSubmitted: () => Promise<void>;
+}) {
+  const owner = members.find((member) => member.role === "OWNER");
+  const [ipoName, setIpoName] = useState("");
+  const [amountRupees, setAmountRupees] = useState("");
+  const [applicationDate, setApplicationDate] = useState("");
+  const [accountId, setAccountId] = useState(owner?.id ?? "");
+  const [registrarId, setRegistrarId] = useState("mufg_intime");
+  const [providerIssueId, setProviderIssueId] = useState("");
+  const [affirmed, setAffirmed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!owner || accountId !== owner.id) {
+      setError("Select the existing owner primary account.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await bridge.invoke<HistoricalApplicationResponse>(
+        "record_historical_application",
+        {
+          request: {
+            actor_member_id: owner.id,
+            account_id: accountId,
+            ipo_name: ipoName.trim(),
+            amount_paise: paiseFromRupees(amountRupees),
+            application_date: applicationDate || null,
+            registrar_id: registrarId,
+            provider_issue_id: providerIssueId.trim(),
+            owner_affirmed: affirmed,
+          },
+        },
+      );
+      setMessage(`Historical application saved · ${response.application_id}`);
+      await onSubmitted();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="page-content invest-page">
+      <section className="section-heading invest-heading">
+        <div>
+          <p className="eyebrow">Owner historical entry</p>
+          <h1>Add historical application</h1>
+          <p>Records an owner-affirmed fact. It does not contact the registrar or set a result.</p>
+        </div>
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          Back to current investment
+        </button>
+      </section>
+      <form className="form-panel investment-form" onSubmit={save}>
+        <label>
+          Historical IPO name
+          <input value={ipoName} onChange={(event) => setIpoName(event.target.value)} required />
+        </label>
+        <label>
+          Historical application amount (₹)
+          <input
+            inputMode="decimal"
+            value={amountRupees}
+            onChange={(event) => setAmountRupees(event.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Application date (optional)
+          <input
+            aria-label="Historical application date"
+            type="date"
+            value={applicationDate}
+            onChange={(event) => setApplicationDate(event.target.value)}
+          />
+        </label>
+        <label>
+          Historical application account
+          <select
+            aria-label="Historical application account"
+            value={accountId}
+            onChange={(event) => setAccountId(event.target.value)}
+            required
+          >
+            <option value="">Select owner account</option>
+            {owner && <option value={owner.id}>{owner.name} · primary account</option>}
+          </select>
+        </label>
+        <label>
+          Registrar
+          <select value={registrarId} onChange={(event) => setRegistrarId(event.target.value)}>
+            <option value="kfintech">KFintech</option>
+            <option value="bigshare">Bigshare Services</option>
+            <option value="mufg_intime">MUFG Intime India Private Limited</option>
+          </select>
+        </label>
+        <label>
+          Provider issue ID
+          <input
+            value={providerIssueId}
+            onChange={(event) => setProviderIssueId(event.target.value)}
+            required
+          />
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={affirmed}
+            onChange={(event) => setAffirmed(event.target.checked)}
+            required
+          />
+          I affirm this is a real historical application made from my primary account.
+        </label>
+        <p>
+          Source: <code>OWNER_HISTORICAL_ENTRY</code> · Automated result: Not yet checked
+        </p>
+        {message && <p className="success-message">{message}</p>}
+        {error && <p className="error-message">{error}</p>}
+        <button className="primary-button" type="submit" disabled={saving || !owner}>
+          {saving ? "Saving…" : "Save historical application"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function InvestView({
   bridge,
   members,
@@ -740,6 +891,7 @@ function InvestView({
   onSubmitted: () => Promise<void>;
 }) {
   const sessionId = useRef(newId("session"));
+  const [historicalMode, setHistoricalMode] = useState(false);
   const [dailyRupees, setDailyRupees] = useState("");
   const [ipos, setIpos] = useState<IpoDraft[]>([
     {
@@ -849,6 +1001,17 @@ function InvestView({
     }
   }
 
+  if (historicalMode) {
+    return (
+      <HistoricalApplicationForm
+        bridge={bridge}
+        members={members}
+        onCancel={() => setHistoricalMode(false)}
+        onSubmitted={onSubmitted}
+      />
+    );
+  }
+
   return (
     <div className="page-content invest-page">
       <section className="section-heading invest-heading">
@@ -856,6 +1019,9 @@ function InvestView({
           <p className="eyebrow">Investment session</p>
           <h1>Plan first. Ask safely. Submit deliberately.</h1>
           <p>CHECK sends only capital, account count, IPO names, amounts, and public references.</p>
+          <button className="text-button" type="button" onClick={() => setHistoricalMode(true)}>
+            Add historical application
+          </button>
         </div>
         <label className="daily-investment">
           Daily investment (₹)

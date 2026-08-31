@@ -1,7 +1,8 @@
 use std::fs;
 
 use sanket_desktop_lib::service::{
-    Application, CheckIpoInput, CheckRequest, OnboardMemberRequest, SubmitIpoInput, SubmitRequest,
+    Application, CheckIpoInput, CheckRequest, HistoricalApplicationRequest, OnboardMemberRequest,
+    SubmitIpoInput, SubmitRequest,
 };
 
 fn synthetic_pan() -> String {
@@ -85,4 +86,150 @@ fn onboarding_check_submit_flow_keeps_plaintext_identity_out_of_projection() {
     assert_eq!(dashboard.submitted_session_count, 1);
     assert_eq!(dashboard.member_count, 1);
     assert_eq!(dashboard.total_planned_paise, 1_000_000);
+}
+
+#[test]
+fn historical_application_records_owner_chain_mapping_without_job_or_pan() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let index = temp.path().join("index.sqlite3");
+    let app = Application::new("device-test-01".to_owned(), vault, index.clone()).unwrap();
+    let pan = synthetic_pan();
+    app.onboard_member(OnboardMemberRequest {
+        member_id: "member-1".to_owned(),
+        display_name: "Owner".to_owned(),
+        email: "owner@example.invalid".to_owned(),
+        role: "OWNER".to_owned(),
+        primary_account_label: Some("Primary".to_owned()),
+        broker: Some("Broker".to_owned()),
+        upi_id: "owner@okbank".to_owned(),
+        pan: pan.clone(),
+        consented: true,
+    })
+    .unwrap();
+
+    let saved = app
+        .record_historical_application(HistoricalApplicationRequest {
+            actor_member_id: "member-1".to_owned(),
+            account_id: "member-1".to_owned(),
+            ipo_name: "Symbiotec Pharmalab Limited".to_owned(),
+            amount_paise: 1_482_000,
+            application_date: None,
+            registrar_id: "mufg_intime".to_owned(),
+            provider_issue_id: "11926".to_owned(),
+            owner_affirmed: true,
+        })
+        .unwrap();
+
+    assert_eq!(saved.source, "OWNER_HISTORICAL_ENTRY");
+    assert_eq!(saved.provider_issue_id, "11926");
+    let db = rusqlite::Connection::open(&index).unwrap();
+    let application: (String, i64, String, Option<String>) = db
+        .query_row(
+            "SELECT ipo_name, planned_amount_paise, source, application_date FROM applications WHERE id=?1",
+            [&saved.application_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        application,
+        (
+            "Symbiotec Pharmalab Limited".to_owned(),
+            1_482_000,
+            "OWNER_HISTORICAL_ENTRY".to_owned(),
+            None,
+        )
+    );
+    let allocation_account: String = db
+        .query_row(
+            "SELECT account_id FROM allocations WHERE application_id=?1",
+            [&saved.application_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(allocation_account, "member-1");
+    let mapping: (String, String) = db
+        .query_row(
+            "SELECT provider_id, provider_issue_id FROM provider_issue_mappings WHERE application_id=?1",
+            [&saved.application_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(mapping, ("mufg-intime-live".to_owned(), "11926".to_owned()));
+    let job_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM allotment_jobs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(job_count, 0);
+    let attempt_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM allotment_attempts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(attempt_count, 0);
+    let sqlite_bytes = fs::read(index).unwrap();
+    assert!(
+        !sqlite_bytes
+            .windows(pan.len())
+            .any(|window| window == pan.as_bytes())
+    );
+}
+
+#[test]
+fn historical_application_rejects_unaffirmed_invalid_and_duplicate_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let app = Application::new(
+        "device-test-01".to_owned(),
+        temp.path().join("vault"),
+        temp.path().join("index.sqlite3"),
+    )
+    .unwrap();
+    app.onboard_member(OnboardMemberRequest {
+        member_id: "member-1".to_owned(),
+        display_name: "Owner".to_owned(),
+        email: "owner@example.invalid".to_owned(),
+        role: "OWNER".to_owned(),
+        primary_account_label: Some("Primary".to_owned()),
+        broker: None,
+        upi_id: "owner@okbank".to_owned(),
+        pan: synthetic_pan(),
+        consented: true,
+    })
+    .unwrap();
+
+    let request =
+        |owner_affirmed: bool, account_id: &str, application_date: Option<&str>, issue: &str| {
+            HistoricalApplicationRequest {
+                actor_member_id: "member-1".to_owned(),
+                account_id: account_id.to_owned(),
+                ipo_name: "Symbiotec Pharmalab Limited".to_owned(),
+                amount_paise: 1_482_000,
+                application_date: application_date.map(str::to_owned),
+                registrar_id: "mufg_intime".to_owned(),
+                provider_issue_id: issue.to_owned(),
+                owner_affirmed,
+            }
+        };
+    assert!(
+        app.record_historical_application(request(false, "member-1", None, "11926"))
+            .is_err()
+    );
+    assert!(
+        app.record_historical_application(request(true, "other", None, "11926"))
+            .is_err()
+    );
+    assert!(
+        app.record_historical_application(request(true, "member-1", Some("2026-02-31"), "11926"))
+            .is_err()
+    );
+    assert!(
+        app.record_historical_application(request(true, "member-1", None, "issue-11926"))
+            .is_err()
+    );
+
+    app.record_historical_application(request(true, "member-1", None, "11926"))
+        .unwrap();
+    let duplicate = app
+        .record_historical_application(request(true, "member-1", None, "11926"))
+        .unwrap_err();
+    assert!(duplicate.to_string().contains("already exists"));
 }
