@@ -194,3 +194,67 @@ fn recommendation_event_stores_algorithm_version() {
     assert_eq!(recs.len(), 1);
     assert_eq!(recs[0].1, "dev-ranking-v001"); // (session_id, algorithm_version, recommendation_id)
 }
+
+#[test]
+fn void_session_excludes_from_submitted_applications() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
+    let events = [
+        seal(
+            "v1",
+            "session",
+            "s-void",
+            EventPayload::InvestmentSessionCreated {
+                session_id: "s-void".to_owned(),
+                actor_member_id: "member-1".to_owned(),
+                declared_capital_paise: 1_482_000,
+            },
+        ),
+        seal(
+            "v2",
+            "application",
+            "app-void",
+            EventPayload::IpoApplicationCreated {
+                application_id: "app-void".to_owned(),
+                session_id: "s-void".to_owned(),
+                ipo_name: "Example IPO".to_owned(),
+                planned_amount_paise: 1_482_000,
+                registrar_id: "kfintech".to_owned(),
+                registrar_name: "KFintech".to_owned(),
+                official_status_url: None,
+                expected_allotment_date: None,
+                source: "OWNER_CURRENT_ENTRY".to_owned(),
+                application_date: None,
+            },
+        ),
+        seal(
+            "v3",
+            "session",
+            "s-void",
+            EventPayload::InvestmentSessionSubmitted {
+                session_id: "s-void".to_owned(),
+                recommendation_id: None,
+            },
+        ),
+    ];
+    for event in &events {
+        index.apply_event(event).unwrap();
+    }
+    assert_eq!(index.list_submitted_applications().unwrap().len(), 1);
+    assert_eq!(index.list_sessions().unwrap()[0].3, "SUBMITTED");
+
+    index
+        .apply_event(&seal(
+            "v4",
+            "session",
+            "s-void",
+            EventPayload::InvestmentSessionVoided {
+                session_id: "s-void".to_owned(),
+                reason: "accidental current entry".to_owned(),
+            },
+        ))
+        .unwrap();
+
+    assert_eq!(index.list_sessions().unwrap()[0].3, "VOIDED");
+    assert!(index.list_submitted_applications().unwrap().is_empty());
+}

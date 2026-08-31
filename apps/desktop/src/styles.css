@@ -631,6 +631,15 @@ code {
   margin-bottom: 10px;
 }
 
+.void-form {
+  margin: 12px 16px 16px;
+  padding: 14px 16px;
+}
+
+.void-form .action-buttons {
+  margin-top: 10px;
+}
+
 .report-summary {
   border-bottom: 1px solid var(--border);
   background: var(--surface-subtle);

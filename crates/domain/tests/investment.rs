@@ -27,6 +27,17 @@ fn session_submitted_transitions_state() {
 }
 
 #[test]
+fn session_void_requires_submitted_and_excludes_open() {
+    let mut open = InvestmentSession::open("s1", "member-1", Money::from_rupees(15_000)).unwrap();
+    assert!(open.mark_voided().is_err());
+    open.mark_submitted();
+    open.mark_voided().unwrap();
+    assert_eq!(open.status(), "VOIDED");
+    assert!(open.is_voided());
+    assert!(!open.is_submitted());
+}
+
+#[test]
 fn application_requires_nonempty_ipo_name_and_positive_amount() {
     // Empty name rejected.
     let app = IpoApplication::create("a1", "s1", "", Money::from_paise(1));

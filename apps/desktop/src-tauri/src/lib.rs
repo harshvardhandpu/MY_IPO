@@ -11,7 +11,7 @@ use service::{
     CheckRequest, CheckResponse, Dashboard, EstimateProfitRequest, EstimatedProfitDto, FriendRow,
     HistoricalApplicationRequest, HistoricalApplicationResponse, ManualAllotmentRequest, MemberRow,
     OnboardMemberRequest, OnboardMemberResponse, SecurityStatusDto, StartAllotmentRequest,
-    SubmitRequest, SubmitResponse,
+    SubmitRequest, SubmitResponse, VoidSessionRequest, VoidSessionResponse,
 };
 
 #[derive(Clone, Debug)]
@@ -184,6 +184,17 @@ fn record_historical_application(
 }
 
 #[tauri::command]
+fn void_submitted_session(
+    state: tauri::State<'_, AppState>,
+    request: VoidSessionRequest,
+) -> Result<VoidSessionResponse, String> {
+    state
+        .application()?
+        .void_submitted_session(request)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_dashboard(state: tauri::State<'_, AppState>) -> Result<Dashboard, String> {
     state.application()?.dashboard().map_err(|e| e.to_string())
 }
@@ -298,6 +309,7 @@ pub fn run() {
             check_recommendation,
             submit_investment,
             record_historical_application,
+            void_submitted_session,
             get_dashboard,
             list_allotment_candidates,
             start_allotment_check,

@@ -111,6 +111,11 @@ pub enum EventPayload {
         session_id: String,
         recommendation_id: Option<String>,
     },
+    /// Owner voided a submitted session (correction). Session remains auditable; excluded from active totals.
+    InvestmentSessionVoided {
+        session_id: String,
+        reason: String,
+    },
     /// A recommendation was generated (algorithm-version tagged, draft only).
     InvestmentRecommendationGenerated {
         session_id: String,
@@ -216,6 +221,7 @@ impl EventPayload {
             Self::IpoApplicationCreated { .. } => "IPO_APPLICATION_CREATED",
             Self::AllocationAdded { .. } => "ALLOCATION_ADDED",
             Self::InvestmentSessionSubmitted { .. } => "INVESTMENT_SESSION_SUBMITTED",
+            Self::InvestmentSessionVoided { .. } => "INVESTMENT_SESSION_VOIDED",
             Self::InvestmentRecommendationGenerated { .. } => "INVESTMENT_RECOMMENDATION_GENERATED",
             Self::InvestmentRecommendationApplied { .. } => "INVESTMENT_RECOMMENDATION_APPLIED",
             Self::AllotmentJobCreated { .. } => "ALLOTMENT_JOB_CREATED",

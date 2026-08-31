@@ -589,6 +589,14 @@ impl LocalIndex {
                     params![session_id, recommendation_id],
                 )?;
             }
+            sanket_domain::EventPayload::InvestmentSessionVoided { session_id, .. } => {
+                // Only submitted sessions move to VOIDED; already-voided stays voided (idempotent).
+                self.connection.execute(
+                    "UPDATE investment_sessions SET status='VOIDED'
+                     WHERE id=?1 AND status IN ('SUBMITTED', 'VOIDED')",
+                    params![session_id],
+                )?;
+            }
             sanket_domain::EventPayload::InvestmentRecommendationGenerated {
                 session_id,
                 algorithm_version,

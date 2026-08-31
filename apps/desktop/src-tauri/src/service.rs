@@ -855,19 +855,107 @@ impl Application {
 
     pub fn dashboard(&self) -> Result<Dashboard> {
         let sessions = self.index.list_sessions()?;
-        let total_invested: i64 = sessions.iter().map(|(_, _, paise, _)| *paise).sum();
+        // Only submitted sessions contribute to active invested totals. VOIDED stays auditable elsewhere.
+        let active: Vec<_> = sessions
+            .iter()
+            .filter(|(_, _, _, status)| status.as_str() == "SUBMITTED")
+            .collect();
+        let total_invested: i64 = active.iter().map(|(_, _, paise, _)| *paise).sum();
         let member_count = self.index.list_members()?.len() as u32;
         let friend_count = self.index.list_active_friends()?.len() as u32;
-        let submitted = sessions
-            .iter()
-            .filter(|(_, _, _, s)| s == "SUBMITTED")
-            .count();
+        let submitted = active.len();
         Ok(Dashboard {
             total_planned_paise: total_invested,
             submitted_session_count: submitted as u32,
             member_count,
             friend_count,
             profit_paise: 0, // profit remains unavailable until real allotment records
+        })
+    }
+
+    /// Owner correction: void a submitted investment session so it no longer affects active totals.
+    /// Append-only; original events remain. Does not access PAN or contact registrars.
+    pub fn void_submitted_session(&self, req: VoidSessionRequest) -> Result<VoidSessionResponse> {
+        if !req.owner_affirmed {
+            return Err(ServiceError::Invalid(
+                "owner affirmation is required to void a session".to_owned(),
+            ));
+        }
+        let reason = req.reason.trim();
+        if reason.is_empty() || reason.len() > 200 {
+            return Err(ServiceError::Invalid(
+                "void reason must be 1 to 200 characters".to_owned(),
+            ));
+        }
+        reject_embedded_pan("void reason", reason)?;
+
+        let sessions = self.index.list_sessions()?;
+        let Some((session_id, actor_member_id, declared_capital_paise, status)) = sessions
+            .into_iter()
+            .find(|(id, _, _, _)| id == &req.session_id)
+        else {
+            return Err(ServiceError::Invalid("session not found".to_owned()));
+        };
+        if status != "SUBMITTED" {
+            return Err(ServiceError::Invalid(
+                "only a submitted session can be voided".to_owned(),
+            ));
+        }
+        if actor_member_id != req.actor_member_id {
+            return Err(ServiceError::Invalid(
+                "only the session actor may void this session".to_owned(),
+            ));
+        }
+        let owner_ok = self
+            .index
+            .list_members()?
+            .into_iter()
+            .any(|(id, _, role, _)| id == req.actor_member_id && role == "OWNER");
+        if !owner_ok {
+            return Err(ServiceError::Invalid(
+                "only the owner may void a submitted session".to_owned(),
+            ));
+        }
+
+        // Domain transition guard (Submitted → Voided).
+        let mut session = InvestmentSession::open(
+            &session_id,
+            &actor_member_id,
+            Money::from_paise(declared_capital_paise.max(1)),
+        )?;
+        session.mark_submitted();
+        session.mark_voided()?;
+
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "session".into(),
+            aggregate_id: session_id.clone(),
+            aggregate_revision: epoch_secs().max(3),
+            actor_member_id: req.actor_member_id.clone(),
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::InvestmentSessionVoided {
+                session_id: session_id.clone(),
+                reason: reason.to_owned(),
+            },
+        })?;
+        self.append_and_project(&event)?;
+
+        // Best-effort: stop non-terminal allotment jobs for this session (no provider calls).
+        for (job_id, _, job_session_id, _, _, job_status) in self.index.list_allotment_jobs()? {
+            if job_session_id == session_id
+                && !matches!(job_status.as_str(), "COMPLETE" | "CANCELLED")
+            {
+                let _ = self.index.request_allotment_cancel(&job_id);
+            }
+        }
+
+        Ok(VoidSessionResponse {
+            session_id,
+            status: "VOIDED".into(),
+            reason: reason.to_owned(),
         })
     }
 
@@ -1962,6 +2050,21 @@ pub struct HistoricalApplicationResponse {
     pub provider_id: String,
     pub provider_issue_id: String,
     pub source: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VoidSessionRequest {
+    pub session_id: String,
+    pub actor_member_id: String,
+    pub reason: String,
+    pub owner_affirmed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VoidSessionResponse {
+    pub session_id: String,
+    pub status: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -16,6 +16,8 @@ pub enum InvestmentError {
     EmptyIpoName,
     #[error("planned amount must be greater than zero")]
     ZeroAmount,
+    #[error("only a submitted session can be voided")]
+    InvalidSessionTransition,
 }
 
 /// A declared plan to invest a daily capital across one or more IPOs.
@@ -33,6 +35,8 @@ pub struct InvestmentSession {
 pub enum SessionStatus {
     Open,
     Submitted,
+    /// Owner-corrected accidental/incorrect submission. Remains auditable; excluded from active totals.
+    Voided,
 }
 
 impl InvestmentSession {
@@ -69,6 +73,7 @@ impl InvestmentSession {
         match self.status {
             SessionStatus::Open => "OPEN",
             SessionStatus::Submitted => "SUBMITTED",
+            SessionStatus::Voided => "VOIDED",
         }
     }
 
@@ -87,6 +92,19 @@ impl InvestmentSession {
 
     pub fn is_submitted(&self) -> bool {
         self.status == SessionStatus::Submitted
+    }
+
+    /// Owner correction: only a submitted session may be voided.
+    pub fn mark_voided(&mut self) -> Result<(), InvestmentError> {
+        if self.status != SessionStatus::Submitted {
+            return Err(InvestmentError::InvalidSessionTransition);
+        }
+        self.status = SessionStatus::Voided;
+        Ok(())
+    }
+
+    pub fn is_voided(&self) -> bool {
+        self.status == SessionStatus::Voided
     }
 }
 

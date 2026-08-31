@@ -549,16 +549,35 @@ function Onboarding({
 function DashboardView({
   bridge,
   dashboard,
+  ownerMemberId,
   onInvest,
   onAllotment,
+  onChanged,
 }: {
   bridge: CommandBridge;
   dashboard: DashboardData;
+  ownerMemberId?: string;
   onInvest: () => void;
   onAllotment: () => void;
+  onChanged?: () => void | Promise<void>;
 }) {
   const [activity, setActivity] = useState<AllotmentCandidate[]>([]);
   const [activityError, setActivityError] = useState(false);
+  const [voidTarget, setVoidTarget] = useState<AllotmentCandidate | null>(null);
+  const [voidReason, setVoidReason] = useState(
+    "Accidental current entry — correcting before historical record",
+  );
+  const [voidAffirmed, setVoidAffirmed] = useState(false);
+  const [voidBusy, setVoidBusy] = useState(false);
+  const [voidError, setVoidError] = useState("");
+  const [voidMessage, setVoidMessage] = useState("");
+
+  const reloadActivity = useCallback(() => {
+    bridge
+      .invoke<AllotmentCandidate[]>("list_allotment_candidates")
+      .then(setActivity)
+      .catch(() => setActivityError(true));
+  }, [bridge]);
 
   useEffect(() => {
     let active = true;
@@ -574,6 +593,32 @@ function DashboardView({
       active = false;
     };
   }, [bridge]);
+
+  async function confirmVoid() {
+    if (!voidTarget || !ownerMemberId) return;
+    setVoidBusy(true);
+    setVoidError("");
+    setVoidMessage("");
+    try {
+      await bridge.invoke("void_submitted_session", {
+        request: {
+          session_id: voidTarget.session_id,
+          actor_member_id: ownerMemberId,
+          reason: voidReason.trim(),
+          owner_affirmed: voidAffirmed,
+        },
+      });
+      setVoidMessage(`Session voided · ${voidTarget.ipo_name}`);
+      setVoidTarget(null);
+      setVoidAffirmed(false);
+      reloadActivity();
+      await onChanged?.();
+    } catch (cause) {
+      setVoidError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setVoidBusy(false);
+    }
+  }
 
   const metrics = [
     {
@@ -771,6 +816,7 @@ function DashboardView({
                   <th>Status</th>
                   <th className="numeric">Amount</th>
                   <th>Last checked</th>
+                  <th>Correction</th>
                 </tr>
               </thead>
               <tbody>
@@ -783,11 +829,26 @@ function DashboardView({
                     </td>
                     <td className="numeric">{formatRupees(candidate.planned_amount_paise)}</td>
                     <td>{candidate.last_checked ?? "Not checked"}</td>
+                    <td>
+                      <button
+                        className="text-button"
+                        disabled={!ownerMemberId || voidBusy}
+                        onClick={() => {
+                          setVoidTarget(candidate);
+                          setVoidError("");
+                          setVoidMessage("");
+                          setVoidAffirmed(false);
+                        }}
+                        type="button"
+                      >
+                        Void entry
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {activity.length === 0 && (
                   <tr className="table-empty">
-                    <td colSpan={5}>
+                    <td colSpan={6}>
                       {activityError
                         ? "Application activity is unavailable. Core ledger totals remain available."
                         : "No submitted applications. Start an investment or add a historical record."}
@@ -797,6 +858,68 @@ function DashboardView({
               </tbody>
             </table>
           </div>
+          {voidMessage && (
+            <p className="inline-ok" role="status">
+              {voidMessage}
+            </p>
+          )}
+          {voidTarget && (
+            <form
+              aria-label="Void submitted session"
+              className="void-form form-panel"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void confirmVoid();
+              }}
+            >
+              <div className="security-strip blocker" role="status">
+                <strong>Owner correction</strong>
+                <span>
+                  Voids “{voidTarget.ipo_name}” ({formatRupees(voidTarget.planned_amount_paise)}).
+                  Original events stay auditable. Active totals and allotment eligibility drop.
+                </span>
+              </div>
+              <label>
+                Reason
+                <input
+                  maxLength={200}
+                  required
+                  value={voidReason}
+                  onChange={(event) => setVoidReason(event.target.value)}
+                />
+              </label>
+              <label className="check-row">
+                <input
+                  checked={voidAffirmed}
+                  onChange={(event) => setVoidAffirmed(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>I affirm this submitted entry should be voided as an owner correction.</span>
+              </label>
+              {voidError && (
+                <p className="inline-error" role="alert">
+                  {voidError}
+                </p>
+              )}
+              <div className="action-buttons">
+                <button
+                  className="secondary-button"
+                  disabled={voidBusy}
+                  onClick={() => setVoidTarget(null)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={voidBusy || !voidAffirmed}
+                  type="submit"
+                >
+                  {voidBusy ? "Voiding…" : "Confirm void"}
+                </button>
+              </div>
+            </form>
+          )}
         </article>
 
         <aside className="panel quick-panel">
@@ -2150,7 +2273,9 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
         <DashboardView
           bridge={bridge}
           dashboard={dashboard}
+          ownerMemberId={members.find((member) => member.role === "OWNER")?.id}
           onAllotment={() => setView("allotment")}
+          onChanged={loadDashboard}
           onInvest={() => setView("invest")}
         />
       )}
