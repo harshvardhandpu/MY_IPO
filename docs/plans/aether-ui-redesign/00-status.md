@@ -16,7 +16,7 @@
 ## Frozen product boundary
 
 - Historical application implementation committed at `70a57bc` before this branch.
-- UI branch: `feature/aether-ui-redesign`.
+- UI branch: `feature/aether-ui-redesign` — committed at `9485b45` (independent review PASS, gpt-oss-120b @ generalcompute, 2026-08-31).
 - No Rust, domain, schema, provider, encryption, keyring, authorization, or accounting changes.
 - No unimplemented product areas added to navigation.
 
