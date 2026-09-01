@@ -7,7 +7,8 @@ mod members;
 mod money;
 
 pub use investment::{
-    InvestmentAllocation, InvestmentError, InvestmentSession, IpoApplication, SessionStatus,
+    InvestmentAllocation, InvestmentError, InvestmentSession, IpoApplication, IpoMetadataSnapshot,
+    SessionStatus,
 };
 pub use members::{CoreMember, FriendAccount, FriendShareError, MemberStatus};
 pub use money::{BasisPoints, BasisPointsError, Money};
@@ -97,6 +98,9 @@ pub enum EventPayload {
         source: String,
         #[serde(default)]
         application_date: Option<String>,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<Box<IpoMetadataSnapshot>>,
     },
     /// A final allocation was added (account-scoped; no PAN).
     AllocationAdded {

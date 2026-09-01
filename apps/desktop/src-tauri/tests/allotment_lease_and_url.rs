@@ -51,6 +51,8 @@ fn queued_job() -> (Application, PathBuf, String) {
             account_ids: vec![member_id.clone()],
             registrar_id: "kfintech".into(),
             expected_allotment_date: None,
+            metadata_snapshot: None,
+            confirm_metadata_changes: false,
         }],
     })
     .unwrap();

@@ -201,6 +201,14 @@ INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);
 COMMIT;
 "#;
 
+// Schema v8: safe public Upstox metadata captured with current applications.
+const SCHEMA_V8: &str = r#"
+BEGIN;
+ALTER TABLE applications ADD COLUMN metadata_json TEXT;
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (8);
+COMMIT;
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
 }
@@ -280,6 +288,8 @@ pub enum LocalIndexError {
     Sqlite(#[from] rusqlite::Error),
     #[error("event serialization failed: {0}")]
     Event(#[from] sanket_domain::EventError),
+    #[error("metadata serialization failed: {0}")]
+    Metadata(String),
     #[error("unsupported event payload for projection: {0}")]
     UnsupportedEvent(String),
 }
@@ -328,6 +338,14 @@ impl LocalIndex {
         )?;
         if version < 7 {
             connection.execute_batch(SCHEMA_V7)?;
+        }
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if version < 8 {
+            connection.execute_batch(SCHEMA_V8)?;
         }
         Ok(Self { connection })
     }
@@ -531,13 +549,19 @@ impl LocalIndex {
                 expected_allotment_date,
                 source,
                 application_date,
+                metadata,
             } => {
+                let metadata_json = metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|error| LocalIndexError::Metadata(error.to_string()))?;
                 self.connection.execute(
                     "INSERT INTO applications(
                          id, session_id, ipo_name, planned_amount_paise, registrar_id,
                          registrar_name, official_status_url, expected_allotment_date,
-                         source, application_date, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                         source, application_date, created_at, metadata_json
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                      ON CONFLICT(id) DO UPDATE SET
                          ipo_name=excluded.ipo_name,
                          planned_amount_paise=excluded.planned_amount_paise,
@@ -546,7 +570,8 @@ impl LocalIndex {
                          official_status_url=excluded.official_status_url,
                          expected_allotment_date=excluded.expected_allotment_date,
                          source=excluded.source,
-                         application_date=excluded.application_date",
+                         application_date=excluded.application_date,
+                         metadata_json=excluded.metadata_json",
                     params![
                         application_id,
                         session_id,
@@ -558,7 +583,8 @@ impl LocalIndex {
                         expected_allotment_date,
                         source,
                         application_date,
-                        event.occurred_at()
+                        event.occurred_at(),
+                        metadata_json
                     ],
                 )?;
                 self.connection.execute(

@@ -34,10 +34,10 @@ fn created() -> EventEnvelope {
 }
 
 #[test]
-fn schema_v7_adds_durable_runtime_tables_without_pan_columns() {
+fn schema_v8_adds_durable_runtime_tables_without_pan_columns() {
     let dir = tempfile::tempdir().unwrap();
     let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
-    assert_eq!(index.schema_version().unwrap(), 7);
+    assert_eq!(index.schema_version().unwrap(), 8);
     for table in [
         "provider_issue_mappings",
         "provider_health",

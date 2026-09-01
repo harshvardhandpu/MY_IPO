@@ -7,6 +7,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::money::{BasisPoints, Money};
 
+/// Public IPO facts captured with an application. It never carries credentials,
+/// PAN, UPI, registrar provider issue ids, or broker-order state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IpoMetadataSnapshot {
+    pub metadata_source: String,
+    pub source_ipo_id: String,
+    pub source_status: String,
+    pub source_name: String,
+    pub source_symbol: String,
+    pub source_isin: Option<String>,
+    pub fetched_at: String,
+    pub revalidated_at: Option<String>,
+    pub minimum_price_paise: Option<i64>,
+    pub maximum_price_paise: Option<i64>,
+    pub cut_off_price_paise: Option<i64>,
+    pub planning_price_paise: Option<i64>,
+    pub price_basis: String,
+    pub lot_size: Option<u64>,
+    pub minimum_quantity: Option<u64>,
+    pub minimum_lots: Option<u64>,
+    pub lots: u64,
+    pub quantity: u64,
+    pub amount_per_account_paise: i64,
+    pub total_capital_paise: i64,
+    pub bidding_start_date: Option<String>,
+    pub bidding_end_date: Option<String>,
+    pub allotment_date: Option<String>,
+    pub listing_date: Option<String>,
+    pub registrar_name: Option<String>,
+    pub registrar_short_name: Option<String>,
+    pub registrar_website: Option<String>,
+}
+
 /// Errors for investment-domain construction.
 #[derive(Debug, thiserror::Error)]
 pub enum InvestmentError {

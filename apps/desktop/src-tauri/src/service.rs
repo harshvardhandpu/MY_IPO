@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use sanket_domain::{
-    CoreMember, EventEnvelope, EventPayload, FriendAccount, InvestmentSession, Money, NewEvent,
-    Role,
+    CoreMember, EventEnvelope, EventPayload, FriendAccount, InvestmentSession, IpoMetadataSnapshot,
+    Money, NewEvent, Role,
 };
 use sanket_identity_security::{
     IdentityKey, InMemoryKeyProvider, OsKeyringKeyProvider, Pan, RuntimeSecurityMode,
@@ -155,6 +155,77 @@ fn reject_embedded_pan(field: &str, value: &str) -> Result<()> {
                     "{field} must not contain a PAN"
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+fn looks_like_upi(value: &str) -> bool {
+    let Some((local, handle)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !handle.is_empty()
+        && local
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        && handle
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+fn validate_metadata_text(field: &str, value: &str) -> Result<()> {
+    if value.len() > 512 || value.chars().any(char::is_control) {
+        return Err(ServiceError::Invalid(format!(
+            "{field} contains unsafe text"
+        )));
+    }
+    reject_embedded_pan(field, value)?;
+    let normalized = value.to_ascii_lowercase();
+    if looks_like_upi(value)
+        || normalized.contains("bearer ")
+        || normalized.contains("api_key")
+        || normalized.contains("api-key")
+        || normalized.contains("password")
+        || normalized.contains("secret")
+        || normalized.contains("token=")
+        || normalized.contains("token:")
+    {
+        return Err(ServiceError::Invalid(format!(
+            "{field} contains sensitive data"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_metadata_snapshot(metadata: &IpoMetadataSnapshot) -> Result<()> {
+    for (field, value) in [
+        ("metadata source", metadata.metadata_source.as_str()),
+        ("source IPO id", metadata.source_ipo_id.as_str()),
+        ("source status", metadata.source_status.as_str()),
+        ("source name", metadata.source_name.as_str()),
+        ("source symbol", metadata.source_symbol.as_str()),
+        ("fetched at", metadata.fetched_at.as_str()),
+        ("price basis", metadata.price_basis.as_str()),
+    ] {
+        validate_metadata_text(field, value)?;
+    }
+    for (field, value) in [
+        ("source ISIN", metadata.source_isin.as_deref()),
+        ("revalidated at", metadata.revalidated_at.as_deref()),
+        ("bidding start date", metadata.bidding_start_date.as_deref()),
+        ("bidding end date", metadata.bidding_end_date.as_deref()),
+        ("allotment date", metadata.allotment_date.as_deref()),
+        ("listing date", metadata.listing_date.as_deref()),
+        ("registrar name", metadata.registrar_name.as_deref()),
+        (
+            "registrar short name",
+            metadata.registrar_short_name.as_deref(),
+        ),
+        ("registrar website", metadata.registrar_website.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_metadata_text(field, value)?;
         }
     }
     Ok(())
@@ -555,6 +626,25 @@ impl Application {
             if let Some(date) = &ipo.expected_allotment_date {
                 reject_embedded_pan("expected allotment date", date)?;
             }
+            if let Some(metadata) = &ipo.metadata_snapshot {
+                validate_metadata_snapshot(metadata)?;
+                let account_count = i64::try_from(ipo.account_ids.len())
+                    .map_err(|_| ServiceError::Invalid("too many accounts".to_owned()))?;
+                let total_capital = ipo
+                    .amount_paise
+                    .checked_mul(account_count)
+                    .ok_or_else(|| ServiceError::Invalid("amount is too large".to_owned()))?;
+                if metadata.metadata_source != "UPSTOX_IPO_API"
+                    || metadata.source_status != "OPEN"
+                    || metadata.source_ipo_id.is_empty()
+                    || metadata.amount_per_account_paise != ipo.amount_paise
+                    || metadata.total_capital_paise != total_capital
+                {
+                    return Err(ServiceError::Invalid(
+                        "official IPO metadata calculation mismatch".to_owned(),
+                    ));
+                }
+            }
             let app_id = format!("{session_id}-app-{idx}");
             events.push(EventEnvelope::seal(NewEvent {
                 event_id: String::new(),
@@ -575,8 +665,13 @@ impl Application {
                     registrar_name: registrar.registrar_name.into(),
                     official_status_url: Some(registrar.official_status_url.into()),
                     expected_allotment_date: ipo.expected_allotment_date.clone(),
-                    source: "OWNER_CURRENT_ENTRY".into(),
+                    source: if ipo.metadata_snapshot.is_some() {
+                        "UPSTOX_IPO_API".into()
+                    } else {
+                        "OWNER_CURRENT_ENTRY".into()
+                    },
                     application_date: None,
+                    metadata: ipo.metadata_snapshot.clone().map(Box::new),
                 },
             })?);
 
@@ -751,6 +846,7 @@ impl Application {
                     expected_allotment_date: None,
                     source: "OWNER_HISTORICAL_ENTRY".into(),
                     application_date: req.application_date,
+                    metadata: None,
                 },
             })?,
             EventEnvelope::seal(NewEvent {
@@ -2013,6 +2109,10 @@ pub struct SubmitIpoInput {
     pub account_ids: Vec<String>,
     pub registrar_id: String,
     pub expected_allotment_date: Option<String>,
+    #[serde(default)]
+    pub metadata_snapshot: Option<IpoMetadataSnapshot>,
+    #[serde(default)]
+    pub confirm_metadata_changes: bool,
 }
 
 #[derive(Debug, Deserialize)]

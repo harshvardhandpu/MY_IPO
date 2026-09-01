@@ -5,11 +5,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sanket_allotment::http::{HttpPolicyError, SharedHttpClient, TIMEOUT_SECS};
+use sanket_domain::IpoMetadataSnapshot;
 use serde::{Deserialize, Serialize};
 
 use crate::provider_credentials::{
     CredentialError, OsProviderCredentialStore, ProviderCredentialKey,
 };
+use crate::service::SubmitRequest;
 
 const UPSTOX_HOST: &str = "api.upstox.com";
 const CACHE_TTL_SECS: u64 = 600;
@@ -143,6 +145,24 @@ pub enum UpstoxError {
     PolicyRefused,
     #[error("public IPO cache is unavailable")]
     CacheUnavailable,
+    #[error("Upstox IPO is no longer OPEN; submission blocked")]
+    IpoNoLongerOpen,
+    #[error("Upstox IPO details changed before submit: {0}. Owner confirmation required")]
+    RevalidationRequired(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LotPlan {
+    pub quantity: u64,
+    pub amount_per_account_paise: i64,
+    pub total_capital_paise: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MetadataChange {
+    pub field: &'static str,
+    pub previous: String,
+    pub current: String,
 }
 
 fn now_secs() -> u64 {
@@ -316,6 +336,223 @@ fn planning_price(cutoff: Option<i64>, upper: Option<i64>) -> (Option<i64>, Pric
         .unwrap_or((None, PriceBasis::Tba))
 }
 
+fn status_text(status: IpoStatus) -> &'static str {
+    match status {
+        IpoStatus::Open => "OPEN",
+        IpoStatus::Upcoming => "UPCOMING",
+        IpoStatus::Closed => "CLOSED",
+        IpoStatus::Listed => "LISTED",
+    }
+}
+
+fn price_basis_text(basis: PriceBasis) -> &'static str {
+    match basis {
+        PriceBasis::CutOff => "CUT_OFF",
+        PriceBasis::UpperBandEstimate => "UPPER_BAND_ESTIMATE",
+        PriceBasis::Tba => "TBA",
+    }
+}
+
+pub fn calculate_lot_plan(
+    item: &IpoCatalogItemDto,
+    lots: u64,
+    account_count: usize,
+) -> Result<LotPlan, UpstoxError> {
+    if lots == 0 || account_count == 0 {
+        return Err(UpstoxError::InvalidResponse);
+    }
+    let minimum_lots = item.minimum_lots.ok_or(UpstoxError::InvalidResponse)?;
+    if lots < minimum_lots {
+        return Err(UpstoxError::InvalidResponse);
+    }
+    let lot_size = item.lot_size.ok_or(UpstoxError::InvalidResponse)?;
+    let planning_price = item
+        .planning_price_paise
+        .ok_or(UpstoxError::InvalidResponse)?;
+    let quantity = lot_size
+        .checked_mul(lots)
+        .ok_or(UpstoxError::InvalidResponse)?;
+    let amount_per_account_paise = i64::try_from(quantity)
+        .ok()
+        .and_then(|quantity| quantity.checked_mul(planning_price))
+        .ok_or(UpstoxError::InvalidResponse)?;
+    let total_capital_paise = amount_per_account_paise
+        .checked_mul(i64::try_from(account_count).map_err(|_| UpstoxError::InvalidResponse)?)
+        .ok_or(UpstoxError::InvalidResponse)?;
+    Ok(LotPlan {
+        quantity,
+        amount_per_account_paise,
+        total_capital_paise,
+    })
+}
+
+pub fn metadata_snapshot(
+    item: &IpoCatalogItemDto,
+    lots: u64,
+    account_count: usize,
+    revalidated_at: Option<String>,
+) -> Result<IpoMetadataSnapshot, UpstoxError> {
+    let plan = calculate_lot_plan(item, lots, account_count)?;
+    Ok(IpoMetadataSnapshot {
+        metadata_source: item.source.clone(),
+        source_ipo_id: item.source_ipo_id.clone(),
+        source_status: status_text(item.status).to_owned(),
+        source_name: item.name.clone(),
+        source_symbol: item.symbol.clone(),
+        source_isin: item.isin.clone(),
+        fetched_at: item.fetched_at.clone(),
+        revalidated_at,
+        minimum_price_paise: item.minimum_price_paise,
+        maximum_price_paise: item.maximum_price_paise,
+        cut_off_price_paise: item.cut_off_price_paise,
+        planning_price_paise: item.planning_price_paise,
+        price_basis: price_basis_text(item.price_basis).to_owned(),
+        lot_size: item.lot_size,
+        minimum_quantity: item.minimum_quantity,
+        minimum_lots: item.minimum_lots,
+        lots,
+        quantity: plan.quantity,
+        amount_per_account_paise: plan.amount_per_account_paise,
+        total_capital_paise: plan.total_capital_paise,
+        bidding_start_date: item.bidding_start_date.clone(),
+        bidding_end_date: item.bidding_end_date.clone(),
+        allotment_date: item.allotment_date.clone(),
+        listing_date: item.listing_date.clone(),
+        registrar_name: item.registrar_name.clone(),
+        registrar_short_name: item.registrar_short_name.clone(),
+        registrar_website: item.registrar_website.clone(),
+    })
+}
+
+fn display_paise(value: Option<i64>) -> String {
+    value
+        .map(|paise| format!("₹{}.{:02}", paise / 100, paise % 100))
+        .unwrap_or_else(|| "TBA".to_owned())
+}
+
+fn display_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "TBA".to_owned())
+}
+
+fn display_text(value: Option<&str>) -> String {
+    value.unwrap_or("TBA").to_owned()
+}
+
+fn add_text_change(
+    changes: &mut Vec<MetadataChange>,
+    field: &'static str,
+    previous: Option<&str>,
+    current: Option<&str>,
+) {
+    if previous != current {
+        changes.push(MetadataChange {
+            field,
+            previous: display_text(previous),
+            current: display_text(current),
+        });
+    }
+}
+
+pub fn metadata_changes(
+    snapshot: &IpoMetadataSnapshot,
+    current: &IpoCatalogItemDto,
+) -> Vec<MetadataChange> {
+    let mut changes = Vec::new();
+    if snapshot.minimum_price_paise != current.minimum_price_paise {
+        changes.push(MetadataChange {
+            field: "minimum price",
+            previous: display_paise(snapshot.minimum_price_paise),
+            current: display_paise(current.minimum_price_paise),
+        });
+    }
+    if snapshot.maximum_price_paise != current.maximum_price_paise {
+        changes.push(MetadataChange {
+            field: "maximum price",
+            previous: display_paise(snapshot.maximum_price_paise),
+            current: display_paise(current.maximum_price_paise),
+        });
+    }
+    if snapshot.cut_off_price_paise != current.cut_off_price_paise {
+        changes.push(MetadataChange {
+            field: "cut-off price",
+            previous: display_paise(snapshot.cut_off_price_paise),
+            current: display_paise(current.cut_off_price_paise),
+        });
+    }
+    if snapshot.planning_price_paise != current.planning_price_paise {
+        changes.push(MetadataChange {
+            field: "planning price",
+            previous: display_paise(snapshot.planning_price_paise),
+            current: display_paise(current.planning_price_paise),
+        });
+    }
+    if snapshot.lot_size != current.lot_size {
+        changes.push(MetadataChange {
+            field: "lot size",
+            previous: display_u64(snapshot.lot_size),
+            current: display_u64(current.lot_size),
+        });
+    }
+    if snapshot.minimum_quantity != current.minimum_quantity {
+        changes.push(MetadataChange {
+            field: "minimum quantity",
+            previous: display_u64(snapshot.minimum_quantity),
+            current: display_u64(current.minimum_quantity),
+        });
+    }
+    add_text_change(
+        &mut changes,
+        "IPO name",
+        Some(&snapshot.source_name),
+        Some(&current.name),
+    );
+    add_text_change(
+        &mut changes,
+        "symbol",
+        Some(&snapshot.source_symbol),
+        Some(&current.symbol),
+    );
+    add_text_change(
+        &mut changes,
+        "ISIN",
+        snapshot.source_isin.as_deref(),
+        current.isin.as_deref(),
+    );
+    add_text_change(
+        &mut changes,
+        "registrar",
+        snapshot.registrar_short_name.as_deref(),
+        current.registrar_short_name.as_deref(),
+    );
+    add_text_change(
+        &mut changes,
+        "bidding start date",
+        snapshot.bidding_start_date.as_deref(),
+        current.bidding_start_date.as_deref(),
+    );
+    add_text_change(
+        &mut changes,
+        "bidding end date",
+        snapshot.bidding_end_date.as_deref(),
+        current.bidding_end_date.as_deref(),
+    );
+    add_text_change(
+        &mut changes,
+        "allotment date",
+        snapshot.allotment_date.as_deref(),
+        current.allotment_date.as_deref(),
+    );
+    add_text_change(
+        &mut changes,
+        "listing date",
+        snapshot.listing_date.as_deref(),
+        current.listing_date.as_deref(),
+    );
+    changes
+}
+
 fn registrar(
     value: Option<&WireRegistrar>,
 ) -> (Option<String>, Option<String>, RegistrarMappingState) {
@@ -368,6 +605,15 @@ fn registrar(
     )
 }
 
+fn registrar_id_for(item: &IpoCatalogItemDto) -> Option<&'static str> {
+    match item.registrar_short_name.as_deref() {
+        Some("KFintech") => Some("kfintech"),
+        Some("Bigshare") => Some("bigshare"),
+        Some("MUFG Intime") => Some("mufg_intime"),
+        _ => None,
+    }
+}
+
 fn validate_source_ipo_id(source_ipo_id: &str) -> Result<(), UpstoxError> {
     if source_ipo_id.is_empty()
         || source_ipo_id == "."
@@ -403,9 +649,14 @@ fn normalize_item(value: &WireIpo, fetched_at: u64) -> Result<IpoCatalogItemDto,
         planning_price(cut_off_price_paise, maximum_price_paise);
     let lot_size = parse_positive_u64(value.lot_size);
     let minimum_quantity = parse_positive_u64(value.minimum_quantity);
-    let minimum_lots = lot_size
-        .zip(minimum_quantity)
-        .and_then(|(lot, minimum)| (minimum % lot == 0).then_some(minimum / lot));
+    let minimum_lots = lot_size.zip(minimum_quantity).map(|(lot, minimum)| {
+        let whole_lots = minimum / lot;
+        if minimum % lot == 0 {
+            whole_lots
+        } else {
+            whole_lots + 1
+        }
+    });
     let cost_per_lot_paise = lot_size
         .zip(planning_price_paise)
         .and_then(|(lot, price)| i64::try_from(lot).ok()?.checked_mul(price));
@@ -757,6 +1008,69 @@ impl UpstoxService {
                 Ok(item)
             }
         }
+    }
+
+    /// Re-fetch selected IPOs immediately before submission. This bypasses the
+    /// cache so a stale cached OPEN record cannot authorize a submission.
+    pub fn prepare_submission(
+        &self,
+        mut request: SubmitRequest,
+    ) -> Result<SubmitRequest, UpstoxError> {
+        let all_official = !request.ipos.is_empty()
+            && request
+                .ipos
+                .iter()
+                .all(|ipo| ipo.metadata_snapshot.is_some());
+        let mut official_total = 0_i64;
+        for ipo in &mut request.ipos {
+            let Some(previous) = ipo.metadata_snapshot.clone() else {
+                continue;
+            };
+            if previous.metadata_source != "UPSTOX_IPO_API"
+                || previous.source_status != "OPEN"
+                || previous.source_ipo_id.is_empty()
+            {
+                return Err(UpstoxError::InvalidResponse);
+            }
+            validate_source_ipo_id(&previous.source_ipo_id)?;
+            let current = self.fetch_details(&previous.source_ipo_id)?;
+            if current.status != IpoStatus::Open {
+                return Err(UpstoxError::IpoNoLongerOpen);
+            }
+            if current.source_ipo_id != previous.source_ipo_id {
+                return Err(UpstoxError::InvalidResponse);
+            }
+            let registrar_id = registrar_id_for(&current).ok_or(UpstoxError::InvalidResponse)?;
+            let changes = metadata_changes(&previous, &current);
+            if !changes.is_empty() && !ipo.confirm_metadata_changes {
+                let summary = changes
+                    .iter()
+                    .map(|change| {
+                        format!("{} {} → {}", change.field, change.previous, change.current)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(UpstoxError::RevalidationRequired(summary));
+            }
+            let snapshot = metadata_snapshot(
+                &current,
+                previous.lots,
+                ipo.account_ids.len(),
+                Some(now_secs().to_string()),
+            )?;
+            ipo.amount_paise = snapshot.amount_per_account_paise;
+            ipo.expected_allotment_date = snapshot.allotment_date.clone();
+            ipo.registrar_id = registrar_id.to_owned();
+            official_total = official_total
+                .checked_add(snapshot.total_capital_paise)
+                .ok_or(UpstoxError::InvalidResponse)?;
+            ipo.metadata_snapshot = Some(snapshot);
+            ipo.confirm_metadata_changes = false;
+        }
+        if all_official {
+            request.declared_capital_paise = official_total;
+        }
+        Ok(request)
     }
 
     fn fetch_list(&self, status: IpoStatus) -> Result<Vec<IpoCatalogItemDto>, UpstoxError> {

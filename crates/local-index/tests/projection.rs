@@ -29,6 +29,13 @@ fn schema_version_two_adds_projection_tables() {
     let dir = tempfile::tempdir().unwrap();
     let index = LocalIndex::open(&dir.path().join("index.sqlite3")).unwrap();
     assert!(index.schema_version().unwrap() >= 2);
+    assert!(
+        index
+            .columns("applications")
+            .unwrap()
+            .iter()
+            .any(|column| column == "metadata_json")
+    );
     for table in [
         "members",
         "friend_accounts",
@@ -116,6 +123,7 @@ fn rebuild_session_and_allocations_from_events() {
                 expected_allotment_date: None,
                 source: "OWNER_CURRENT_ENTRY".into(),
                 application_date: None,
+                metadata: None,
             },
         ),
         seal(
@@ -225,6 +233,7 @@ fn void_session_excludes_from_submitted_applications() {
                 expected_allotment_date: None,
                 source: "OWNER_CURRENT_ENTRY".to_owned(),
                 application_date: None,
+                metadata: None,
             },
         ),
         seal(

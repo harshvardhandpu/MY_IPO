@@ -136,6 +136,8 @@ fn service_never_persists_or_emits_plaintext_identity() {
             account_ids: vec!["member-security".to_owned(), "friend-security".to_owned()],
             registrar_id: "kfintech".into(),
             expected_allotment_date: None,
+            metadata_snapshot: None,
+            confirm_metadata_changes: false,
         }],
     })
     .unwrap();

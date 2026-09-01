@@ -153,6 +153,126 @@ describe("functional desktop flows", () => {
     expect(await screen.findByText("Investment session submitted")).toBeVisible();
   });
 
+  it("calculates official IPO lots across accounts and requires confirmation after revalidation changes", async () => {
+    let submitAttempts = 0;
+    const openItem = {
+      source: "UPSTOX_IPO_API",
+      source_ipo_id: "acme-ipo",
+      isin: "INE000000000",
+      issue_size_crore: "123.45",
+      industry: "Manufacturing",
+      symbol: "ACME",
+      name: "Acme Industries Limited",
+      issue_type: "REGULAR",
+      status: "OPEN",
+      minimum_price_paise: 10000,
+      maximum_price_paise: 12050,
+      cut_off_price_paise: 12050,
+      planning_price_paise: 12050,
+      price_basis: "CUT_OFF",
+      lot_size: 10,
+      minimum_quantity: 10,
+      minimum_lots: 1,
+      cost_per_lot_paise: 120500,
+      minimum_application_amount_paise: 120500,
+      bidding_start_date: "2026-08-31",
+      bidding_end_date: "2026-09-02",
+      allotment_date: "2026-09-03",
+      listing_date: "2026-09-05",
+      pre_apply_start_date: null,
+      allotment_start_date: null,
+      refund_initiation_date: null,
+      mandate_end_date: null,
+      daily_start_time: null,
+      daily_end_time: null,
+      face_value_paise: null,
+      tick_size_paise: null,
+      listing_price_paise: null,
+      rhp_url: null,
+      drhp_url: null,
+      registrar_name: "KFin Technologies Limited",
+      registrar_short_name: "KFintech",
+      registrar_email: null,
+      registrar_contact_name: null,
+      registrar_contact_number: null,
+      registrar_website: "https://kfintech.com",
+      registrar_mapping_state: "CONFIRMED_ALIAS",
+      listing_exchange: null,
+      total_subscription: "3.25",
+      fetched_at: "1756633600",
+      stale: false,
+      safe_message: null,
+    };
+    const bridge = bridgeWith({
+      list_members: () => [member, { ...member, id: "member-2", name: "Second Owner" }],
+      list_friends: () => [],
+      get_dashboard: () => ({
+        total_planned_paise: 0,
+        submitted_session_count: 0,
+        member_count: 2,
+        friend_count: 0,
+        profit_paise: 0,
+      }),
+      list_available_ipos: (args) => {
+        const status = (args?.query as { status: string } | undefined)?.status ?? "";
+        return {
+          status,
+          items: status === "OPEN" ? [openItem] : [],
+          stale: false,
+          fetched_at: "1756633600",
+          safe_message: null,
+        };
+      },
+      get_ipo_details: () => openItem,
+      check_recommendation: () => ({
+        session_id: "session-upstox",
+        algorithm_version: "dev-ranking-v001",
+        label: "DEVELOPMENT ALGORITHM — NOT INVESTMENT ADVICE",
+        explanation: "Deterministic development allocation.",
+        ipos: [],
+      }),
+      submit_investment: (args) => {
+        submitAttempts += 1;
+        const request = args?.request as {
+          declared_capital_paise: number;
+          ipos: Array<{
+            amount_paise: number;
+            metadata_snapshot?: { source_ipo_id: string; quantity: number };
+            confirm_metadata_changes?: boolean;
+          }>;
+        };
+        expect(request.declared_capital_paise).toBe(723_000);
+        expect(request.ipos[0].amount_paise).toBe(361_500);
+        expect(request.ipos[0].metadata_snapshot).toEqual(
+          expect.objectContaining({ source_ipo_id: "acme-ipo", quantity: 30 }),
+        );
+        if (submitAttempts === 1) {
+          throw new Error(
+            "Upstox IPO details changed before submit: planning price ₹120.50 → ₹125.00. Owner confirmation required.",
+          );
+        }
+        expect(request.ipos[0].confirm_metadata_changes).toBe(true);
+        return { session_id: "session-upstox", allocation_count: 4 };
+      },
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Invest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "View details & auto-fill" }));
+    expect(await screen.findByLabelText("Lots")).toHaveValue(1);
+    fireEvent.change(screen.getByLabelText("Lots"), { target: { value: "3" } });
+    expect(screen.getByText("Quantity: 30")).toBeVisible();
+    fireEvent.click(screen.getByLabelText("Owner · ABCDE****F"));
+    fireEvent.click(screen.getByLabelText("Second Owner · ABCDE****F"));
+    expect(screen.getByText("Total capital: ₹7,230")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "CHECK" }));
+    expect(await screen.findByText("DEVELOPMENT ALGORITHM — NOT INVESTMENT ADVICE")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "SUBMIT" }));
+    expect(await screen.findByText(/planning price ₹120\.50 → ₹125\.00/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm changes and SUBMIT" }));
+    expect(await screen.findByText("Investment session submitted")).toBeVisible();
+  });
+
   it("presents one provider-independent allotment flow with mixed account progress", async () => {
     const report = {
       job_id: "job-1",

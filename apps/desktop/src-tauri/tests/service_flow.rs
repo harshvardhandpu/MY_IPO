@@ -77,6 +77,8 @@ fn onboarding_check_submit_flow_keeps_plaintext_identity_out_of_projection() {
                 account_ids: vec!["member-1".to_owned()],
                 registrar_id: "kfintech".into(),
                 expected_allotment_date: None,
+                metadata_snapshot: None,
+                confirm_metadata_changes: false,
             }],
         })
         .unwrap();

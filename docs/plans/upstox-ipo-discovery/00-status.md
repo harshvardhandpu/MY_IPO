@@ -4,6 +4,7 @@
 - Gate 2 — Contract/research: PASS WITH NON-BLOCKING FINDINGS 2026-08-31
 - Gate 3 — Program Design: APPROVED 2026-08-31
 - Gate 4 — Phase 2 implementation and verification: PASS 2026-09-01
+- Gate 4 — Phase 3 implementation and host verification: PASS 2026-09-01
 
 ## Gate 4 slices
 - [x] 4A — secure credential/keyring integration and safe connection status
@@ -11,9 +12,9 @@
 - [x] 4C — bounded native HTTPS transport and public metadata cache
 - [x] 4D — typed Tauri boundary
 - [x] 4E — Available IPO catalogue and details
-- [ ] 4F — lots, accounts, and existing CHECK/SUBMIT preparation
-- [ ] 4G — submission revalidation and safe metadata snapshot
-- [ ] 4H — authenticated identifier-free metadata validation
+- [x] 4F — lots, accounts, and existing CHECK/SUBMIT preparation
+- [x] 4G — submission revalidation and safe metadata snapshot
+- [ ] 4H — authenticated identifier-free metadata validation (owner live-validation gate)
 - [x] 4I — independent whole-feature review
 
 ## Phase 2 verification
@@ -41,6 +42,13 @@
 - Gate 4A must pass before the owner generates or enters a real Analytics Token through native Settings.
 - Current official docs: `/v2/ipos`, `/v2/ipos/{id}`, Analytics Token (read-only, one-year, free per current docs).
 - Upstox IPO `id` is a separate namespace from registrar `provider_issue_id`.
+
+## Phase 3 final verification
+
+- Host verification passed before cleanup: Rust format check, workspace clippy with `-D warnings`, workspace tests, schema v8 tests, legacy event compatibility, Upstox Phase 3 tests, frontend production build, Rust release build, DEB build, RPM build, and `git diff --check`.
+- Verified release binary is preserved at `~/.local/bin/sanket-ipo`. `target/`, `node_modules/`, and `apps/desktop/dist/` were intentionally cleaned after verification and must not be recreated for this handoff.
+- AppImage packaging is a non-blocking follow-up: a square icon is not configured.
+- Live authenticated validation remains owner-gated. No Analytics Token was requested or used; PAN, broker orders, UPI mandates, MUFG lookup, and Symbiotec pilot activity remain out of scope.
 
 ## Locked Gate 1 product decisions
 - Upstox-supplied IPO metadata is read-only in normal auto-fill mode. Explicit `MANUAL ENTRY` is the only override path and uses `metadata_source = OWNER_MANUAL_METADATA`.

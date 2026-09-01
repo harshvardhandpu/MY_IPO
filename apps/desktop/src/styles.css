@@ -1161,6 +1161,23 @@ legend {
   margin-top: 2px;
 }
 
+.ipo-calculation {
+  display: flex;
+  grid-column: 2 / -1;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.calculated-capital {
+  margin: 12px 0 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 720;
+}
+
 .account-fieldset {
   margin-top: 6px;
 }

@@ -182,6 +182,10 @@ fn submit_investment(
     state: tauri::State<'_, AppState>,
     request: SubmitRequest,
 ) -> Result<SubmitResponse, String> {
+    let request = state
+        .upstox
+        .prepare_submission(request)
+        .map_err(|e| e.to_string())?;
     state
         .application()?
         .submit(request)

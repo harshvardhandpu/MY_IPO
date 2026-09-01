@@ -49,6 +49,8 @@ fn allotment_fixture_never_persists_plaintext_pan() {
             account_ids: vec![member_id.clone()],
             registrar_id: "kfintech".into(),
             expected_allotment_date: None,
+            metadata_snapshot: None,
+            confirm_metadata_changes: false,
         }],
     })
     .unwrap();
@@ -188,6 +190,8 @@ fn bigshare_job_recovers_cancels_and_preserves_manual_provenance_without_pan_acc
             account_ids: vec![member_id.clone()],
             registrar_id: "bigshare".into(),
             expected_allotment_date: Some("2026-08-30".into()),
+            metadata_snapshot: None,
+            confirm_metadata_changes: false,
         }],
     })
     .unwrap();

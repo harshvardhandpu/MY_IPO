@@ -54,6 +54,38 @@ interface IpoDraft {
   registrarId: string;
   expectedAllotmentDate: string;
   included: boolean;
+  lots: string;
+  metadataSnapshot: IpoMetadataSnapshot | null;
+}
+
+interface IpoMetadataSnapshot {
+  metadata_source: "UPSTOX_IPO_API";
+  source_ipo_id: string;
+  source_status: "OPEN";
+  source_name: string;
+  source_symbol: string;
+  source_isin: string | null;
+  fetched_at: string;
+  revalidated_at: string | null;
+  minimum_price_paise: number | null;
+  maximum_price_paise: number | null;
+  cut_off_price_paise: number | null;
+  planning_price_paise: number | null;
+  price_basis: "CUT_OFF" | "UPPER_BAND_ESTIMATE" | "TBA";
+  lot_size: number | null;
+  minimum_quantity: number | null;
+  minimum_lots: number | null;
+  lots: number;
+  quantity: number;
+  amount_per_account_paise: number;
+  total_capital_paise: number;
+  bidding_start_date: string | null;
+  bidding_end_date: string | null;
+  allotment_date: string | null;
+  listing_date: string | null;
+  registrar_name: string | null;
+  registrar_short_name: string | null;
+  registrar_website: string | null;
 }
 
 interface IpoCatalogItem {
@@ -241,6 +273,100 @@ function formatOptionalRupees(paise: number | null): string {
 function rupeesInputFromPaise(paise: number | null): string {
   if (paise == null || paise <= 0) return "";
   return (paise / 100).toFixed(paise % 100 === 0 ? 0 : 2);
+}
+
+interface OfficialLotPlan {
+  quantity: number;
+  amountPerAccountPaise: number;
+  totalCapitalPaise: number;
+}
+
+function calculateOfficialPlan(
+  snapshot: IpoMetadataSnapshot,
+  lots: number,
+  accountCount: number,
+): OfficialLotPlan | null {
+  if (
+    !Number.isSafeInteger(lots) ||
+    lots <= 0 ||
+    snapshot.lot_size == null ||
+    snapshot.minimum_quantity == null ||
+    snapshot.minimum_lots == null ||
+    snapshot.planning_price_paise == null ||
+    (snapshot.minimum_lots != null && lots < snapshot.minimum_lots)
+  ) {
+    return null;
+  }
+  const quantity = snapshot.lot_size * lots;
+  const amountPerAccountPaise = quantity * snapshot.planning_price_paise;
+  const totalCapitalPaise = amountPerAccountPaise * accountCount;
+  if (
+    !Number.isSafeInteger(quantity) ||
+    !Number.isSafeInteger(amountPerAccountPaise) ||
+    !Number.isSafeInteger(totalCapitalPaise)
+  ) {
+    return null;
+  }
+  return { quantity, amountPerAccountPaise, totalCapitalPaise };
+}
+
+function registrarIdFromDetails(item: IpoCatalogItem): string {
+  switch (item.registrar_short_name) {
+    case "KFintech":
+      return "kfintech";
+    case "Bigshare":
+      return "bigshare";
+    case "MUFG Intime":
+      return "mufg_intime";
+    default:
+      return "";
+  }
+}
+
+function metadataSnapshotFromDetails(
+  item: IpoCatalogItem,
+  lots: number,
+  accountCount: number,
+): IpoMetadataSnapshot | null {
+  if (item.status !== "OPEN") return null;
+  const snapshot = {
+    metadata_source: "UPSTOX_IPO_API" as const,
+    source_ipo_id: item.source_ipo_id,
+    source_status: "OPEN" as const,
+    source_name: item.name,
+    source_symbol: item.symbol,
+    source_isin: item.isin,
+    fetched_at: item.fetched_at,
+    revalidated_at: null,
+    minimum_price_paise: item.minimum_price_paise,
+    maximum_price_paise: item.maximum_price_paise,
+    cut_off_price_paise: item.cut_off_price_paise,
+    planning_price_paise: item.planning_price_paise,
+    price_basis: item.price_basis,
+    lot_size: item.lot_size,
+    minimum_quantity: item.minimum_quantity,
+    minimum_lots: item.minimum_lots,
+    lots,
+    quantity: 0,
+    amount_per_account_paise: 0,
+    total_capital_paise: 0,
+    bidding_start_date: item.bidding_start_date,
+    bidding_end_date: item.bidding_end_date,
+    allotment_date: item.allotment_date,
+    listing_date: item.listing_date,
+    registrar_name: item.registrar_name,
+    registrar_short_name: item.registrar_short_name,
+    registrar_website: item.registrar_website,
+  } satisfies IpoMetadataSnapshot;
+  const plan = calculateOfficialPlan(snapshot, lots, accountCount);
+  return plan
+    ? {
+        ...snapshot,
+        quantity: plan.quantity,
+        amount_per_account_paise: plan.amountPerAccountPaise,
+        total_capital_paise: plan.totalCapitalPaise,
+      }
+    : null;
 }
 
 function userFacingError(cause: unknown, fallback: string): string {
@@ -1668,6 +1794,8 @@ function InvestView({
       registrarId: "kfintech",
       expectedAllotmentDate: "",
       included: true,
+      lots: "",
+      metadataSnapshot: null,
     },
   ]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
@@ -1680,6 +1808,7 @@ function InvestView({
   const [selectedDetails, setSelectedDetails] = useState<IpoCatalogItem | null>(null);
   const [catalogueError, setCatalogueError] = useState("");
   const [catalogueBusy, setCatalogueBusy] = useState(false);
+  const [revalidationPending, setRevalidationPending] = useState(false);
   const accounts = useMemo(
     () => [
       ...members.map((member) => ({ id: member.id, label: member.name, pan: member.masked_pan })),
@@ -1687,6 +1816,26 @@ function InvestView({
     ],
     [members, friends],
   );
+
+  function officialPlanFor(ipo: IpoDraft): OfficialLotPlan | null {
+    if (!ipo.metadataSnapshot) return null;
+    return calculateOfficialPlan(ipo.metadataSnapshot, Number(ipo.lots), accountIds.length);
+  }
+
+  function amountPaiseFor(ipo: IpoDraft): number {
+    return ipo.metadataSnapshot
+      ? (officialPlanFor(ipo)?.amountPerAccountPaise ?? 0)
+      : paiseFromRupees(ipo.amountRupees);
+  }
+
+  const calculatedTotalCapital = (() => {
+    const selected = ipos.filter((ipo) => ipo.included);
+    if (selected.length === 0 || selected.some((ipo) => !ipo.metadataSnapshot)) return null;
+    const plans = selected.map(officialPlanFor);
+    if (!plans.every((plan): plan is OfficialLotPlan => plan !== null)) return null;
+    const total = plans.reduce((sum, plan) => sum + plan.totalCapitalPaise, 0);
+    return Number.isSafeInteger(total) ? total : null;
+  })();
 
   useEffect(() => {
     let active = true;
@@ -1717,6 +1866,7 @@ function InvestView({
     setIpos((current) => current.map((ipo) => (ipo.id === id ? { ...ipo, ...patch } : ipo)));
     setRecommendation(null);
     setMessage("");
+    setRevalidationPending(false);
   }
 
   function toggleAccount(id: string) {
@@ -1724,6 +1874,7 @@ function InvestView({
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
     setRecommendation(null);
+    setRevalidationPending(false);
   }
 
   async function chooseIpo(item: IpoCatalogItem, investable: boolean) {
@@ -1735,13 +1886,21 @@ function InvestView({
       });
       setSelectedDetails(details);
       if (investable && details.status === "OPEN") {
-        const registrarId = details.registrar_short_name?.toLowerCase().replaceAll(" ", "_") ?? "";
+        const lots = details.minimum_lots ?? 1;
+        const metadataSnapshot = metadataSnapshotFromDetails(details, lots, accountIds.length);
         updateIpo(ipos[0].id, {
           name: details.name,
-          amountRupees: rupeesInputFromPaise(details.minimum_application_amount_paise),
-          registrarId,
+          amountRupees: rupeesInputFromPaise(metadataSnapshot?.amount_per_account_paise ?? null),
+          registrarId: registrarIdFromDetails(details),
           expectedAllotmentDate: details.allotment_date ?? "",
+          lots: String(lots),
+          metadataSnapshot,
         });
+        if (!metadataSnapshot) {
+          setCatalogueError(
+            "This IPO is OPEN but its price or lot data is incomplete. Continue with manual entry.",
+          );
+        }
       } else if (investable) {
         setCatalogueError(
           "This IPO is no longer OPEN. Review the details or continue with manual entry.",
@@ -1755,13 +1914,21 @@ function InvestView({
   }
 
   function validate(): string | null {
-    if (paiseFromRupees(dailyRupees) <= 0) return "Enter a positive daily investment.";
     const selectedIpos = ipos.filter((ipo) => ipo.included);
     if (selectedIpos.length === 0) return "Select at least one IPO.";
-    if (selectedIpos.some((ipo) => !ipo.name.trim() || paiseFromRupees(ipo.amountRupees) <= 0)) {
+    if (selectedIpos.some((ipo) => ipo.metadataSnapshot && !officialPlanFor(ipo))) {
+      return "Each official IPO needs a valid lot count before continuing.";
+    }
+    if (selectedIpos.every((ipo) => ipo.metadataSnapshot) && calculatedTotalCapital == null) {
+      return "Calculated total capital is too large to submit safely.";
+    }
+    if (selectedIpos.some((ipo) => !ipo.name.trim() || amountPaiseFor(ipo) <= 0)) {
       return "Each selected IPO needs a name and positive amount per account.";
     }
     if (accountIds.length === 0) return "Select at least one member or friend account.";
+    if (calculatedTotalCapital == null && paiseFromRupees(dailyRupees) <= 0) {
+      return "Enter a positive daily investment.";
+    }
     return null;
   }
 
@@ -1777,13 +1944,13 @@ function InvestView({
       const response = await bridge.invoke<CheckResponse>("check_recommendation", {
         request: {
           session_id: sessionId.current,
-          declared_capital_paise: paiseFromRupees(dailyRupees),
+          declared_capital_paise: calculatedTotalCapital ?? paiseFromRupees(dailyRupees),
           account_ids: accountIds,
           ipos: ipos
             .filter((ipo) => ipo.included)
             .map((ipo) => ({
               name: ipo.name.trim(),
-              amount_paise: paiseFromRupees(ipo.amountRupees),
+              amount_paise: amountPaiseFor(ipo),
             })),
         },
       });
@@ -1795,7 +1962,20 @@ function InvestView({
     }
   }
 
-  async function submit() {
+  function metadataSnapshotForSubmission(ipo: IpoDraft): IpoMetadataSnapshot | null {
+    if (!ipo.metadataSnapshot) return null;
+    const plan = officialPlanFor(ipo);
+    if (!plan) return null;
+    return {
+      ...ipo.metadataSnapshot,
+      lots: Number(ipo.lots),
+      quantity: plan.quantity,
+      amount_per_account_paise: plan.amountPerAccountPaise,
+      total_capital_paise: plan.totalCapitalPaise,
+    };
+  }
+
+  async function submit(confirmMetadataChanges = false) {
     if (!recommendation) return;
     setBusy(true);
     setError("");
@@ -1804,23 +1984,28 @@ function InvestView({
         request: {
           session_id: sessionId.current,
           actor_member_id: members[0].id,
-          declared_capital_paise: paiseFromRupees(dailyRupees),
+          declared_capital_paise: calculatedTotalCapital ?? paiseFromRupees(dailyRupees),
           recommendation_id: null,
           ipos: ipos
             .filter((ipo) => ipo.included)
             .map((ipo) => ({
               name: ipo.name.trim(),
-              amount_paise: paiseFromRupees(ipo.amountRupees),
+              amount_paise: amountPaiseFor(ipo),
               account_ids: accountIds,
               registrar_id: ipo.registrarId,
               expected_allotment_date: ipo.expectedAllotmentDate || null,
+              metadata_snapshot: metadataSnapshotForSubmission(ipo),
+              confirm_metadata_changes: confirmMetadataChanges,
             })),
         },
       });
+      setRevalidationPending(false);
       setMessage("Investment session submitted");
       await onSubmitted();
     } catch (cause) {
-      setError(userFacingError(cause, "The request could not be completed. Try again."));
+      const message = userFacingError(cause, "The request could not be completed. Try again.");
+      setError(message);
+      setRevalidationPending(/owner confirmation required/i.test(message));
     } finally {
       setBusy(false);
     }
@@ -2021,6 +2206,7 @@ function InvestView({
                 <label>
                   IPO name
                   <input
+                    disabled={Boolean(ipo.metadataSnapshot)}
                     required={ipo.included}
                     value={ipo.name}
                     onChange={(e) => updateIpo(ipo.id, { name: e.target.value })}
@@ -2030,6 +2216,7 @@ function InvestView({
                   Registrar
                   <select
                     aria-label="Registrar"
+                    disabled={Boolean(ipo.metadataSnapshot)}
                     value={ipo.registrarId}
                     onChange={(e) => updateIpo(ipo.id, { registrarId: e.target.value })}
                   >
@@ -2042,20 +2229,51 @@ function InvestView({
                   Expected allotment date
                   <input
                     aria-label="Expected allotment date"
+                    disabled={Boolean(ipo.metadataSnapshot)}
                     type="date"
                     value={ipo.expectedAllotmentDate}
                     onChange={(e) => updateIpo(ipo.id, { expectedAllotmentDate: e.target.value })}
                   />
                 </label>
+                {ipo.metadataSnapshot && (
+                  <label>
+                    Lots
+                    <input
+                      aria-label="Lots"
+                      min={ipo.metadataSnapshot.minimum_lots ?? 1}
+                      step="1"
+                      type="number"
+                      value={ipo.lots}
+                      onChange={(e) => updateIpo(ipo.id, { lots: e.target.value })}
+                    />
+                  </label>
+                )}
                 <label>
                   Amount per account (₹)
                   <input
                     inputMode="decimal"
+                    readOnly={Boolean(ipo.metadataSnapshot)}
                     required={ipo.included}
-                    value={ipo.amountRupees}
+                    value={rupeesInputFromPaise(
+                      officialPlanFor(ipo)?.amountPerAccountPaise ??
+                        paiseFromRupees(ipo.amountRupees),
+                    )}
                     onChange={(e) => updateIpo(ipo.id, { amountRupees: e.target.value })}
                   />
                 </label>
+                {ipo.metadataSnapshot && (
+                  <div className="ipo-calculation" aria-live="polite">
+                    <span>Quantity: {officialPlanFor(ipo)?.quantity ?? "TBA"}</span>
+                    <span>Source: Upstox · {ipo.metadataSnapshot.source_ipo_id}</span>
+                    <button
+                      className="text-button"
+                      onClick={() => updateIpo(ipo.id, { lots: "", metadataSnapshot: null })}
+                      type="button"
+                    >
+                      Use manual entry
+                    </button>
+                  </div>
+                )}
                 {ipos.length > 1 && (
                   <button
                     aria-label={`Remove IPO ${index + 1}`}
@@ -2082,6 +2300,8 @@ function InvestView({
                     registrarId: "kfintech",
                     expectedAllotmentDate: "",
                     included: true,
+                    lots: "",
+                    metadataSnapshot: null,
                   },
                 ])
               }
@@ -2089,6 +2309,11 @@ function InvestView({
             >
               + Add another IPO
             </button>
+            {calculatedTotalCapital != null && (
+              <p className="calculated-capital" role="status">
+                Total capital: {formatRupees(calculatedTotalCapital)}
+              </p>
+            )}
           </fieldset>
 
           <fieldset className="account-fieldset">
@@ -2116,9 +2341,21 @@ function InvestView({
             </div>
           </fieldset>
           {error && (
-            <p className="inline-error" role="alert">
-              {error}
-            </p>
+            <div>
+              <p className="inline-error" role="alert">
+                {error}
+              </p>
+              {revalidationPending && (
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() => void submit(true)}
+                  type="button"
+                >
+                  Confirm changes and SUBMIT
+                </button>
+              )}
+            </div>
           )}
         </div>
 
