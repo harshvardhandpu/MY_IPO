@@ -2,7 +2,7 @@ use std::fs;
 
 use sanket_desktop_lib::service::{
     Application, CheckIpoInput, CheckRequest, HistoricalApplicationRequest, OnboardMemberRequest,
-    SubmitIpoInput, SubmitRequest,
+    SubmitIpoInput, SubmitRequest, VoidSessionRequest,
 };
 
 fn synthetic_pan() -> String {
@@ -234,4 +234,102 @@ fn historical_application_rejects_unaffirmed_invalid_and_duplicate_entries() {
         .record_historical_application(request(true, "member-1", None, "11926"))
         .unwrap_err();
     assert!(duplicate.to_string().contains("already exists"));
+}
+
+#[test]
+fn voided_historical_application_allows_replacement_but_active_duplicate_still_rejects() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let index = temp.path().join("index.sqlite3");
+    let app = Application::new(
+        "device-test-01".to_owned(),
+        vault.clone(),
+        index.clone(),
+    )
+    .unwrap();
+    app.onboard_member(OnboardMemberRequest {
+        member_id: "member-1".to_owned(),
+        display_name: "Owner".to_owned(),
+        email: "owner@example.invalid".to_owned(),
+        role: "OWNER".to_owned(),
+        primary_account_label: Some("Primary".to_owned()),
+        broker: None,
+        upi_id: "owner@okbank".to_owned(),
+        pan: synthetic_pan(),
+        consented: true,
+    })
+    .unwrap();
+
+    let request = || HistoricalApplicationRequest {
+        actor_member_id: "member-1".to_owned(),
+        account_id: "member-1".to_owned(),
+        ipo_name: "Symbiotec Pharmalab Limited".to_owned(),
+        amount_paise: 1_482_000,
+        application_date: None,
+        registrar_id: "mufg_intime".to_owned(),
+        provider_issue_id: "11926".to_owned(),
+        owner_affirmed: true,
+    };
+
+    let original = app.record_historical_application(request()).unwrap();
+    app.void_submitted_session(VoidSessionRequest {
+        session_id: original.session_id.clone(),
+        actor_member_id: "member-1".to_owned(),
+        reason: "replace duplicate historical entry".to_owned(),
+        owner_affirmed: true,
+    })
+    .unwrap();
+
+    let replacement = app.record_historical_application(request()).unwrap();
+    let duplicate = app.record_historical_application(request()).unwrap_err();
+    assert!(duplicate.to_string().contains("already exists"));
+
+    let db = rusqlite::Connection::open(&index).unwrap();
+    let original_status: String = db
+        .query_row(
+            "SELECT status FROM investment_sessions WHERE id=?1",
+            [&original.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let replacement_status: String = db
+        .query_row(
+            "SELECT status FROM investment_sessions WHERE id=?1",
+            [&replacement.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(original_status, "VOIDED");
+    assert_eq!(replacement_status, "SUBMITTED");
+
+    let active_equivalent_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*)
+             FROM applications a
+             JOIN investment_sessions s ON s.id=a.session_id
+             JOIN provider_issue_mappings p ON p.application_id=a.id
+             WHERE s.actor_member_id=?1
+               AND s.status='SUBMITTED'
+               AND lower(trim(a.ipo_name))=lower(trim(?2))
+               AND a.source='OWNER_HISTORICAL_ENTRY'
+               AND p.provider_id='mufg-intime-live'
+               AND p.provider_issue_id='11926'",
+            ["member-1", "Symbiotec Pharmalab Limited"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_equivalent_count, 1);
+
+    let event_contents: Vec<String> = fs::read_dir(vault.join("_events"))
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert!(event_contents.iter().any(|event| {
+        event.contains(&original.application_id)
+            && event.contains("OWNER_HISTORICAL_ENTRY")
+    }));
+    assert!(event_contents.iter().any(|event| {
+        event.contains(&original.session_id)
+            && event.contains("INVESTMENT_SESSION_VOIDED")
+    }));
 }

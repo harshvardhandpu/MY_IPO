@@ -993,6 +993,7 @@ impl LocalIndex {
                  JOIN investment_sessions s ON s.id = a.session_id
                  JOIN provider_issue_mappings p ON p.application_id = a.id
                  WHERE s.actor_member_id = ?1
+                   AND s.status = 'SUBMITTED'
                    AND lower(trim(a.ipo_name)) = lower(trim(?2))
                    AND p.provider_id = ?3
                    AND p.provider_issue_id = ?4
