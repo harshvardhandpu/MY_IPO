@@ -56,6 +56,63 @@ interface IpoDraft {
   included: boolean;
 }
 
+interface IpoCatalogItem {
+  source: string;
+  source_ipo_id: string;
+  isin: string | null;
+  issue_size_crore: string | null;
+  industry: string | null;
+  symbol: string;
+  name: string;
+  issue_type: "REGULAR" | "SME";
+  status: "OPEN" | "UPCOMING" | "CLOSED" | "LISTED";
+  minimum_price_paise: number | null;
+  maximum_price_paise: number | null;
+  cut_off_price_paise: number | null;
+  planning_price_paise: number | null;
+  price_basis: "CUT_OFF" | "UPPER_BAND_ESTIMATE" | "TBA";
+  lot_size: number | null;
+  minimum_quantity: number | null;
+  minimum_lots: number | null;
+  cost_per_lot_paise: number | null;
+  minimum_application_amount_paise: number | null;
+  bidding_start_date: string | null;
+  bidding_end_date: string | null;
+  allotment_date: string | null;
+  listing_date: string | null;
+  pre_apply_start_date: string | null;
+  allotment_start_date: string | null;
+  refund_initiation_date: string | null;
+  mandate_end_date: string | null;
+  daily_start_time: string | null;
+  daily_end_time: string | null;
+  face_value_paise: number | null;
+  tick_size_paise: number | null;
+  listing_price_paise: number | null;
+  rhp_url: string | null;
+  drhp_url: string | null;
+  registrar_name: string | null;
+  registrar_short_name: string | null;
+  registrar_email: string | null;
+  registrar_contact_name: string | null;
+  registrar_contact_number: string | null;
+  registrar_website: string | null;
+  registrar_mapping_state: "CONFIRMED_ALIAS" | "UNKNOWN";
+  listing_exchange: string | null;
+  total_subscription: string | null;
+  fetched_at: string;
+  stale: boolean;
+  safe_message: string | null;
+}
+
+interface IpoCatalogue {
+  status: "OPEN" | "UPCOMING";
+  items: IpoCatalogItem[];
+  stale: boolean;
+  fetched_at: string;
+  safe_message: string | null;
+}
+
 interface HistoricalApplicationResponse {
   session_id: string;
   application_id: string;
@@ -175,6 +232,15 @@ function formatRupees(paise: number): string {
     currency: "INR",
     maximumFractionDigits: 0,
   }).format(paise / 100);
+}
+
+function formatOptionalRupees(paise: number | null): string {
+  return paise == null ? "TBA" : formatRupees(paise);
+}
+
+function rupeesInputFromPaise(paise: number | null): string {
+  if (paise == null || paise <= 0) return "";
+  return (paise / 100).toFixed(paise % 100 === 0 ? 0 : 2);
 }
 
 function userFacingError(cause: unknown, fallback: string): string {
@@ -1609,6 +1675,11 @@ function InvestView({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [openCatalogue, setOpenCatalogue] = useState<IpoCatalogue | null>(null);
+  const [upcomingCatalogue, setUpcomingCatalogue] = useState<IpoCatalogue | null>(null);
+  const [selectedDetails, setSelectedDetails] = useState<IpoCatalogItem | null>(null);
+  const [catalogueError, setCatalogueError] = useState("");
+  const [catalogueBusy, setCatalogueBusy] = useState(false);
   const accounts = useMemo(
     () => [
       ...members.map((member) => ({ id: member.id, label: member.name, pan: member.masked_pan })),
@@ -1616,6 +1687,31 @@ function InvestView({
     ],
     [members, friends],
   );
+
+  useEffect(() => {
+    let active = true;
+    setCatalogueBusy(true);
+    Promise.all([
+      bridge.invoke<IpoCatalogue>("list_available_ipos", { query: { status: "OPEN" } }),
+      bridge.invoke<IpoCatalogue>("list_available_ipos", { query: { status: "UPCOMING" } }),
+    ])
+      .then(([open, upcoming]) => {
+        if (!active) return;
+        setOpenCatalogue(open);
+        setUpcomingCatalogue(upcoming);
+        setCatalogueError("");
+      })
+      .catch(() => {
+        if (active)
+          setCatalogueError("Upstox is unavailable. Manual entry remains available below.");
+      })
+      .finally(() => {
+        if (active) setCatalogueBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [bridge]);
 
   function updateIpo(id: string, patch: Partial<IpoDraft>) {
     setIpos((current) => current.map((ipo) => (ipo.id === id ? { ...ipo, ...patch } : ipo)));
@@ -1628,6 +1724,34 @@ function InvestView({
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
     setRecommendation(null);
+  }
+
+  async function chooseIpo(item: IpoCatalogItem, investable: boolean) {
+    setCatalogueBusy(true);
+    setCatalogueError("");
+    try {
+      const details = await bridge.invoke<IpoCatalogItem>("get_ipo_details", {
+        sourceIpoId: item.source_ipo_id,
+      });
+      setSelectedDetails(details);
+      if (investable && details.status === "OPEN") {
+        const registrarId = details.registrar_short_name?.toLowerCase().replaceAll(" ", "_") ?? "";
+        updateIpo(ipos[0].id, {
+          name: details.name,
+          amountRupees: rupeesInputFromPaise(details.minimum_application_amount_paise),
+          registrarId,
+          expectedAllotmentDate: details.allotment_date ?? "",
+        });
+      } else if (investable) {
+        setCatalogueError(
+          "This IPO is no longer OPEN. Review the details or continue with manual entry.",
+        );
+      }
+    } catch {
+      setCatalogueError("IPO details are unavailable. You can continue with manual entry.");
+    } finally {
+      setCatalogueBusy(false);
+    }
   }
 
   function validate(): string | null {
@@ -1744,10 +1868,146 @@ function InvestView({
         </label>
       </section>
 
+      <section className="ipo-catalogue" aria-labelledby="available-ipos-heading">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Official Upstox metadata</p>
+            <h2 id="available-ipos-heading">Available IPOs</h2>
+          </div>
+          {catalogueBusy && <span className="muted-label">Refreshing…</span>}
+        </div>
+        {catalogueError && <p className="inline-error">{catalogueError}</p>}
+        {!catalogueError && (openCatalogue?.safe_message || upcomingCatalogue?.safe_message) && (
+          <p className="inline-error">
+            {openCatalogue?.safe_message ?? upcomingCatalogue?.safe_message}
+          </p>
+        )}
+        {!catalogueError && !openCatalogue && !catalogueBusy && (
+          <p className="empty-account-note">No catalogue data available. Use manual entry below.</p>
+        )}
+        <div className="ipo-catalogue-columns">
+          <div>
+            <h3>OPEN · investable</h3>
+            {(openCatalogue?.items ?? []).map((item) => (
+              <article className="ipo-catalogue-card" key={item.source_ipo_id}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <small>{item.symbol || item.issue_type}</small>
+                </div>
+                <p>
+                  {formatOptionalRupees(item.minimum_price_paise)} –{" "}
+                  {formatOptionalRupees(item.maximum_price_paise)} · {item.price_basis}
+                </p>
+                <button type="button" onClick={() => void chooseIpo(item, true)}>
+                  View details & auto-fill
+                </button>
+              </article>
+            ))}
+            {openCatalogue && openCatalogue.items.length === 0 && (
+              <p className="empty-account-note">No OPEN IPOs returned.</p>
+            )}
+          </div>
+          <div>
+            <h3>UPCOMING · view-only</h3>
+            {(upcomingCatalogue?.items ?? []).map((item) => (
+              <article className="ipo-catalogue-card" key={item.source_ipo_id}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <small>{item.symbol || item.issue_type}</small>
+                </div>
+                <p>
+                  {formatOptionalRupees(item.minimum_price_paise)} –{" "}
+                  {formatOptionalRupees(item.maximum_price_paise)} · {item.price_basis}
+                </p>
+                <button type="button" onClick={() => void chooseIpo(item, false)}>
+                  View details
+                </button>
+              </article>
+            ))}
+            {upcomingCatalogue && upcomingCatalogue.items.length === 0 && (
+              <p className="empty-account-note">No UPCOMING IPOs returned.</p>
+            )}
+          </div>
+        </div>
+        {selectedDetails && (
+          <article className="ipo-details" aria-live="polite">
+            <div className="section-heading compact-heading">
+              <div>
+                <p className="eyebrow">IPO details</p>
+                <h3>{selectedDetails.name}</h3>
+              </div>
+              <span className="dev-label">{selectedDetails.status}</span>
+            </div>
+            {selectedDetails.safe_message && (
+              <p className="inline-error">{selectedDetails.safe_message}</p>
+            )}
+            <dl className="ipo-detail-grid">
+              <div>
+                <dt>Price band</dt>
+                <dd>
+                  {formatOptionalRupees(selectedDetails.minimum_price_paise)} –{" "}
+                  {formatOptionalRupees(selectedDetails.maximum_price_paise)}
+                </dd>
+              </div>
+              <div>
+                <dt>Cut-off / planning price</dt>
+                <dd>
+                  {formatOptionalRupees(selectedDetails.planning_price_paise)} ·{" "}
+                  {selectedDetails.price_basis}
+                </dd>
+              </div>
+              <div>
+                <dt>Lot size</dt>
+                <dd>{selectedDetails.lot_size ?? "TBA"}</dd>
+              </div>
+              <div>
+                <dt>Minimum quantity</dt>
+                <dd>{selectedDetails.minimum_quantity ?? "TBA"}</dd>
+              </div>
+              <div>
+                <dt>Cost per lot</dt>
+                <dd>{formatOptionalRupees(selectedDetails.cost_per_lot_paise)}</dd>
+              </div>
+              <div>
+                <dt>Minimum application</dt>
+                <dd>{formatOptionalRupees(selectedDetails.minimum_application_amount_paise)}</dd>
+              </div>
+              <div>
+                <dt>Bidding dates</dt>
+                <dd>
+                  {selectedDetails.bidding_start_date ?? "TBA"} →{" "}
+                  {selectedDetails.bidding_end_date ?? "TBA"}
+                </dd>
+              </div>
+              <div>
+                <dt>Allotment / listing</dt>
+                <dd>
+                  {selectedDetails.allotment_date ?? "TBA"} /{" "}
+                  {selectedDetails.listing_date ?? "TBA"}
+                </dd>
+              </div>
+              <div>
+                <dt>Registrar</dt>
+                <dd>
+                  {selectedDetails.registrar_name ?? "TBA"}
+                  {selectedDetails.registrar_mapping_state === "UNKNOWN"
+                    ? " · unsupported for automation"
+                    : ""}
+                </dd>
+              </div>
+              <div>
+                <dt>Subscription</dt>
+                <dd>{selectedDetails.total_subscription ?? "TBA"}</dd>
+              </div>
+            </dl>
+          </article>
+        )}
+      </section>
+
       <section className="studio-grid">
         <div className="form-panel investment-form">
           <fieldset className="ipo-fieldset">
-            <legend>Applying for</legend>
+            <legend>Applying for · manual entry remains available</legend>
             {ipos.map((ipo, index) => (
               <div className="ipo-row" key={ipo.id}>
                 <label className="include-control">

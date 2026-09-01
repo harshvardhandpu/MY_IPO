@@ -1,5 +1,6 @@
 pub mod provider_credentials;
 pub mod service;
+pub mod upstox;
 pub mod worker;
 
 use std::path::PathBuf;
@@ -18,8 +19,9 @@ use service::{
     OnboardMemberRequest, OnboardMemberResponse, SecurityStatusDto, StartAllotmentRequest,
     SubmitRequest, SubmitResponse, VoidSessionRequest, VoidSessionResponse,
 };
+use upstox::{IpoCatalogItemDto, IpoCatalogueDto, IpoListQuery};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppState {
     app_version: &'static str,
     device_id: String,
@@ -28,6 +30,7 @@ pub struct AppState {
     index_path: PathBuf,
     worker: Option<worker::AllotmentWorkerHandle>,
     provider_credentials: OsProviderCredentialStore,
+    pub(crate) upstox: upstox::UpstoxService,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -64,11 +67,17 @@ impl AppState {
             index_path,
             worker: None,
             provider_credentials: OsProviderCredentialStore,
+            upstox: upstox::UpstoxService::new(PathBuf::new()),
         }
     }
 
     pub fn with_worker(mut self, worker: worker::AllotmentWorkerHandle) -> Self {
         self.worker = Some(worker);
+        self
+    }
+
+    pub fn with_upstox(mut self, upstox: upstox::UpstoxService) -> Self {
+        self.upstox = upstox;
         self
     }
 
@@ -310,6 +319,30 @@ fn disconnect_upstox(state: tauri::State<'_, AppState>) -> ProviderConnectionSta
     disconnect(&state.provider_credentials)
 }
 
+#[tauri::command]
+fn list_available_ipos(
+    state: tauri::State<'_, AppState>,
+    query: IpoListQuery,
+) -> Result<IpoCatalogueDto, String> {
+    upstox::list_available_ipos(&state, query)
+}
+
+#[tauri::command]
+fn refresh_ipo_catalog(
+    state: tauri::State<'_, AppState>,
+    query: IpoListQuery,
+) -> Result<IpoCatalogueDto, String> {
+    upstox::refresh_ipo_catalog(&state, query)
+}
+
+#[tauri::command]
+fn get_ipo_details(
+    state: tauri::State<'_, AppState>,
+    source_ipo_id: String,
+) -> Result<IpoCatalogItemDto, String> {
+    upstox::get_ipo_details(&state, source_ipo_id)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -330,8 +363,10 @@ pub fn run() {
                 index_path.clone(),
                 mode,
             );
+            let upstox_cache = app_data_dir.join("public-cache/upstox-ipo.json");
             app.manage(
                 AppState::build(settings.device_id, schema_version, vault_root, index_path)
+                    .with_upstox(upstox::UpstoxService::new(upstox_cache))
                     .with_worker(worker),
             );
             Ok(())
@@ -358,7 +393,10 @@ pub fn run() {
             get_upstox_connection_status,
             connect_upstox_analytics_token,
             replace_upstox_analytics_token,
-            disconnect_upstox
+            disconnect_upstox,
+            list_available_ipos,
+            refresh_ipo_catalog,
+            get_ipo_details
         ])
         .run(tauri::generate_context!())
         .expect("Sanket IPO desktop runtime failed");

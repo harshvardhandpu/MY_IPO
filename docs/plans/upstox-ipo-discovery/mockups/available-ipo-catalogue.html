@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Available IPOs — Product Mockup</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #18221c; background: #f1f4f1; }
+    body { max-width: 1180px; margin: 0 auto; padding: 32px; }
+    header, .toolbar, .layout, .metric-grid, .detail-grid { display: grid; gap: 16px; }
+    header { grid-template-columns: 1fr auto; align-items: end; }
+    h1 { margin: 0 0 4px; font-size: 32px; letter-spacing: -.04em; }
+    p { color: #59685e; margin: 0; }
+    button, input, select { font: inherit; border: 1px solid #b9c8bd; border-radius: 7px; padding: 10px 12px; background: #fff; }
+    button.primary { background: #247352; color: white; border-color: #247352; font-weight: 700; }
+    .toolbar { grid-template-columns: 1fr auto auto auto; margin: 24px 0; }
+    .tabs button { border: 0; border-radius: 0; background: transparent; color: #59685e; }
+    .tabs button.active { color: #247352; border-bottom: 2px solid #247352; font-weight: 700; }
+    .layout { grid-template-columns: 1.2fr .8fr; align-items: start; }
+    .cards { display: grid; gap: 12px; }
+    .card, .detail, .metric { background: white; border: 1px solid #dce4de; border-radius: 10px; padding: 18px; box-shadow: 0 8px 24px rgb(35 55 42 / .035); }
+    .card header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+    .badge { color: #177a54; background: #e6f4ed; border-radius: 99px; padding: 4px 8px; font-size: 11px; font-weight: 800; }
+    .eyebrow { font-size: 11px; letter-spacing: .12em; color: #77847a; font-weight: 800; text-transform: uppercase; }
+    .price { font-size: 25px; font-weight: 750; margin-top: 14px; }
+    .metric-grid, .detail-grid { grid-template-columns: repeat(2, 1fr); margin: 18px 0; }
+    .metric strong { display: block; font-size: 18px; margin-top: 4px; }
+    .detail { position: sticky; top: 20px; }
+    .timeline { border-left: 2px solid #dce4de; padding-left: 14px; display: grid; gap: 12px; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    @media (max-width: 800px) { body { padding: 18px; } header, .toolbar, .layout { grid-template-columns: 1fr; } .detail { position: static; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><div class="eyebrow">Invest · public catalogue</div><h1>Available IPOs</h1><p>Official public metadata · refreshed 2 minutes ago · <strong>Cached data</strong> remains visibly timestamped</p></div>
+    <button>↻ Refresh</button>
+  </header>
+  <div class="toolbar">
+    <input aria-label="Search company" placeholder="Search company or symbol">
+    <div class="tabs"><button class="active">OPEN</button><button>UPCOMING</button></div>
+    <select aria-label="Segment"><option>All segments</option><option>Mainboard</option><option>SME</option></select>
+    <select aria-label="Sort"><option>Closing soon</option><option>Minimum investment</option><option>Subscription</option></select>
+  </div>
+  <main class="layout">
+    <section class="cards" aria-label="Open IPOs">
+      <article class="card">
+        <header><div><div class="eyebrow">Mainboard · ABCD</div><h2>Example Industries IPO</h2></div><span class="badge">OPEN</span></header>
+        <div class="price">₹280 – ₹295 <small>/ share</small></div><p>Planning price ₹295 · <strong>Upper band estimate</strong></p>
+        <div class="metric-grid"><div class="metric"><div class="eyebrow">Lot size</div><strong>50 shares</strong></div><div class="metric"><div class="eyebrow">Cost / lot</div><strong>₹14,750</strong></div><div class="metric"><div class="eyebrow">Minimum application</div><strong>₹14,750</strong></div><div class="metric"><div class="eyebrow">Closes</div><strong>04 Sep 2026</strong></div></div>
+        <p>Subscription <strong>8.4×</strong> · Registrar: Example RTA</p><div class="actions"><button>View details</button><button class="primary">Invest in this IPO</button></div>
+      </article>
+      <article class="card"><header><div><div class="eyebrow">SME · NEXTIPO</div><h2>Upcoming Company IPO</h2></div><span class="badge">UPCOMING</span></header><div class="price">Price TBA</div><p>Opens 12 Sep 2026 · Lot rules will appear when officially announced.</p><div class="actions"><button>View details</button></div></article>
+    </section>
+    <aside class="detail"><div class="eyebrow">Selected IPO</div><h2>Example Industries IPO</h2><p>ABCD · Mainboard · NSE, BSE</p><div class="detail-grid"><div><div class="eyebrow">Price band</div><strong>₹280 – ₹295</strong></div><div><div class="eyebrow">Planning basis</div><strong>₹295 · Upper band estimate</strong></div><div><div class="eyebrow">Lot size</div><strong>50 shares</strong></div><div><div class="eyebrow">Minimum quantity</div><strong>100 shares · 2 lots</strong></div><div><div class="eyebrow">Minimum application</div><strong>₹29,500</strong></div><div><div class="eyebrow">Metadata</div><strong>Read-only · Upstox API</strong></div></div><div class="timeline"><div><b>Opens</b><br>01 Sep 2026</div><div><b>Closes</b><br>04 Sep 2026</div><div><b>Allotment</b><br>08 Sep 2026</div><div><b>Listing</b><br>10 Sep 2026</div></div><div class="actions"><button class="primary">Invest in this IPO</button></div></aside>
+  </main>
+</body>
+</html>

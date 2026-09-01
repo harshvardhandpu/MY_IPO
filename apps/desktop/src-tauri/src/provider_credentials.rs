@@ -94,6 +94,7 @@ pub struct ConnectUpstoxAnalyticsTokenRequest {
 pub enum CredentialError {
     EmptyCredential,
     CredentialTooLong,
+    MissingCredential,
     NoDurableBackend,
     KeyringUnavailable,
     KeyringLocked,
@@ -105,6 +106,7 @@ impl CredentialError {
         match self {
             Self::EmptyCredential => "Enter an Analytics Token.",
             Self::CredentialTooLong => "The Analytics Token is too long.",
+            Self::MissingCredential => "Connect an Analytics Token first.",
             Self::NoDurableBackend => "OS keyring is unavailable.",
             Self::KeyringUnavailable | Self::KeyringLocked | Self::StorageFailure => {
                 "Could not access the OS keyring."
@@ -140,6 +142,21 @@ impl OsProviderCredentialStore {
             return Err(CredentialError::NoDurableBackend);
         }
         Ok(entry)
+    }
+
+    pub(crate) fn with_secret<T>(
+        &self,
+        key: ProviderCredentialKey,
+        operation: impl FnOnce(&str) -> T,
+    ) -> Result<T, CredentialError> {
+        let entry = self.ensure_durable_backend(key)?;
+        let password = entry.get_password().map_err(|error| match error {
+            keyring::Error::NoEntry => CredentialError::MissingCredential,
+            keyring::Error::NoStorageAccess(_) => CredentialError::KeyringLocked,
+            _ => CredentialError::KeyringUnavailable,
+        })?;
+        let password = Zeroizing::new(password);
+        Ok(operation(password.as_str()))
     }
 }
 

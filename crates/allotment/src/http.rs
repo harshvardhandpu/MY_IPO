@@ -147,10 +147,51 @@ impl SharedHttpClient {
 
         // Redirect safety: final URI must still be on the allowlist.
         let final_host = response.get_uri().host().unwrap_or_default().to_string();
-        if !allowlist.contains(&final_host.as_str()) {
+        if response.get_uri().scheme().map(|scheme| scheme.as_str()) != Some("https")
+            || !allowlist.contains(&final_host.as_str())
+        {
             return Err(HttpPolicyError::RedirectNotAllowed { host: final_host });
         }
 
+        read_body(response, max_bytes)
+    }
+
+    /// Bounded JSON GET with a caller-owned authorization header. The header
+    /// is never included in errors or logs; callers must keep it native-only.
+    pub fn get_json_with_header(
+        &self,
+        url: &str,
+        allowlist: &[&str],
+        authorization: &str,
+        max_bytes: u64,
+        timeout_override: u64,
+    ) -> Result<String, HttpPolicyError> {
+        let host = self.begin_request(url, allowlist)?;
+        let response = self
+            .agent
+            .get(url)
+            .header("Accept", "application/json")
+            .header("Authorization", authorization)
+            .header("Connection", "close")
+            .config()
+            .timeout_global(Some(Duration::from_secs(timeout_override)))
+            .build()
+            .call();
+        let response = match response {
+            Ok(response) => response,
+            Err(ureq::Error::StatusCode(code)) => return Err(HttpPolicyError::Status(code)),
+            Err(ureq::Error::TooManyRedirects) => return Err(HttpPolicyError::TooManyRedirects),
+            Err(ureq::Error::RedirectFailed) => {
+                return Err(HttpPolicyError::RedirectNotAllowed { host });
+            }
+            Err(error) => return Err(HttpPolicyError::Transport(sanitize_transport(&error))),
+        };
+        let final_host = response.get_uri().host().unwrap_or_default().to_string();
+        if response.get_uri().scheme().map(|scheme| scheme.as_str()) != Some("https")
+            || !allowlist.contains(&final_host.as_str())
+        {
+            return Err(HttpPolicyError::RedirectNotAllowed { host: final_host });
+        }
         read_body(response, max_bytes)
     }
 
@@ -186,7 +227,9 @@ impl SharedHttpClient {
             }
         };
         let final_host = response.get_uri().host().unwrap_or_default().to_string();
-        if !allowlist.contains(&final_host.as_str()) {
+        if response.get_uri().scheme().map(|scheme| scheme.as_str()) != Some("https")
+            || !allowlist.contains(&final_host.as_str())
+        {
             return Err(HttpPolicyError::RedirectNotAllowed { host: final_host });
         }
         read_body(response, max_bytes)
