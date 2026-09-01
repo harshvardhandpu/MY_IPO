@@ -5,6 +5,7 @@
 - Gate 3 — Program Design: APPROVED 2026-08-31
 - Gate 4 — Phase 2 implementation and verification: PASS 2026-09-01
 - Gate 4 — Phase 3 implementation and host verification: PASS 2026-09-01
+- Gate 4H — Authenticated read-only live validation: PASS 2026-09-01
 
 ## Gate 4 slices
 - [x] 4A — secure credential/keyring integration and safe connection status
@@ -14,7 +15,7 @@
 - [x] 4E — Available IPO catalogue and details
 - [x] 4F — lots, accounts, and existing CHECK/SUBMIT preparation
 - [x] 4G — submission revalidation and safe metadata snapshot
-- [ ] 4H — authenticated identifier-free metadata validation (owner live-validation gate)
+- [x] 4H — authenticated identifier-free metadata validation (read-only live validation)
 - [x] 4I — independent whole-feature review
 
 ## Phase 2 verification
@@ -30,7 +31,7 @@
 
 - Phase 2 is read-only Upstox public IPO discovery: OPEN/UPCOMING catalogue, details, safe normalized metadata, and OPEN-only auto-fill into the existing Invest composer.
 - Manual entry and the existing CHECK/SUBMIT flow remain available; no broker order path was added.
-- No real Analytics Token was requested or used for this verification. Authenticated live inventory validation remains deferred to Phase 3.
+- No real Analytics Token was requested or used during Phase 2 verification. Authenticated live inventory validation was completed in Phase 3; see below.
 - PAN access, UPI operations, registrar investor lookup, real MUFG lookup, and Symbiotec pilot continuation remain out of scope.
 
 ## Notes for a fresh session
@@ -39,7 +40,7 @@
 - Upstox is public metadata only. No member, friend, balance, PAN, UPI, or private Sanket data may be sent to Upstox.
 - No Upstox order/application API will be integrated in this feature.
 - Owner approved Gate 3 entry on 2026-08-31. Use Analytics Token only; do not design an Algo Trading App/OAuth flow or request a token in chat.
-- Gate 4A must pass before the owner generates or enters a real Analytics Token through native Settings.
+- Gate 4A passed before the owner entered the Analytics Token through native Settings.
 - Current official docs: `/v2/ipos`, `/v2/ipos/{id}`, Analytics Token (read-only, one-year, free per current docs).
 - Upstox IPO `id` is a separate namespace from registrar `provider_issue_id`.
 
@@ -48,7 +49,23 @@
 - Host verification passed before cleanup: Rust format check, workspace clippy with `-D warnings`, workspace tests, schema v8 tests, legacy event compatibility, Upstox Phase 3 tests, frontend production build, Rust release build, DEB build, RPM build, and `git diff --check`.
 - Verified release binary is preserved at `~/.local/bin/sanket-ipo`. `target/`, `node_modules/`, and `apps/desktop/dist/` were intentionally cleaned after verification and must not be recreated for this handoff.
 - AppImage packaging is a non-blocking follow-up: a square icon is not configured.
-- Live authenticated validation remains owner-gated. No Analytics Token was requested or used; PAN, broker orders, UPI mandates, MUFG lookup, and Symbiotec pilot activity remain out of scope.
+- Live authenticated validation passed through the native read-only status/catalogue/details paths. The token value was not accessed or displayed; PAN, broker orders, UPI mandates, MUFG lookup, and Symbiotec pilot activity remain out of scope.
+
+## Phase 3 live validation
+
+- Authenticated status: **PASS**
+- OPEN IPO catalogue: **PASS**
+- UPCOMING IPO catalogue: **PASS**
+- IPO details and real field rendering: **PASS** — name, status, price band/cutoff/planning price, lot size, minimum quantity/lots, cost per lot, minimum application amount, bidding dates, allotment/listing dates, registrar, and subscription state.
+- Catalogue UI: **PASS**
+- Price/lot math: **PASS**
+- Registrar parsing: **PASS**
+- Token leak: **NO**
+- PAN accessed: **NO**
+- Financial record created: **NO**
+- Broker order placed: **NO**
+- Upstox IPO id remained separate from registrar `provider_issue_id`.
+- **UPSTOX FEATURE: READY FOR USE**
 
 ## Locked Gate 1 product decisions
 - Upstox-supplied IPO metadata is read-only in normal auto-fill mode. Explicit `MANUAL ENTRY` is the only override path and uses `metadata_source = OWNER_MANUAL_METADATA`.
