@@ -28,7 +28,7 @@ use crate::provider::{
     AllotmentLookupContext, AllotmentProvider, BackgroundExecution, HumanVerificationRequirement,
     IssueDiscoveryMode, LookupKeyKind, NegativeResultProof, PositiveResultProof,
     ProviderAllotmentResult, ProviderCapabilities, ProviderError, ProviderHealth,
-    ProviderTransportKind, RegistrarIssue, SessionRequirement,
+    ProviderTransportKind, RealInvestorLookupPermit, RegistrarIssue, SessionRequirement,
 };
 
 const DISCOVERY_URL: &str = "https://in.mpms.mufg.com/Initial_Offer/public-issues.html";
@@ -734,12 +734,24 @@ impl AllotmentProvider for MufgIntimeProvider {
 
     fn check_allotment(
         &self,
+        _context: &AllotmentLookupContext,
+        _pan: &Pan,
+    ) -> Result<ProviderAllotmentResult, ProviderError> {
+        Err(ProviderError::Retryable(
+            "mufg real investor lookup requires a runtime permit".into(),
+        ))
+    }
+
+    fn check_allotment_with_permit(
+        &self,
+        application_id: &str,
         context: &AllotmentLookupContext,
         pan: &Pan,
+        permit: &RealInvestorLookupPermit,
     ) -> Result<ProviderAllotmentResult, ProviderError> {
-        if !crate::REAL_INVESTOR_LOOKUP_AUTHORIZED {
+        if !permit.matches(application_id, self.provider_id()) {
             return Err(ProviderError::Retryable(
-                "mufg real investor lookup is not authorized".into(),
+                "mufg real investor lookup permit scope mismatch".into(),
             ));
         }
         self.execute_live_lookup(context, pan)

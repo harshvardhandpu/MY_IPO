@@ -241,12 +241,7 @@ fn voided_historical_application_allows_replacement_but_active_duplicate_still_r
     let temp = tempfile::tempdir().unwrap();
     let vault = temp.path().join("vault");
     let index = temp.path().join("index.sqlite3");
-    let app = Application::new(
-        "device-test-01".to_owned(),
-        vault.clone(),
-        index.clone(),
-    )
-    .unwrap();
+    let app = Application::new("device-test-01".to_owned(), vault.clone(), index.clone()).unwrap();
     app.onboard_member(OnboardMemberRequest {
         member_id: "member-1".to_owned(),
         display_name: "Owner".to_owned(),
@@ -325,11 +320,9 @@ fn voided_historical_application_allows_replacement_but_active_duplicate_still_r
         .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
         .collect();
     assert!(event_contents.iter().any(|event| {
-        event.contains(&original.application_id)
-            && event.contains("OWNER_HISTORICAL_ENTRY")
+        event.contains(&original.application_id) && event.contains("OWNER_HISTORICAL_ENTRY")
     }));
     assert!(event_contents.iter().any(|event| {
-        event.contains(&original.session_id)
-            && event.contains("INVESTMENT_SESSION_VOIDED")
+        event.contains(&original.session_id) && event.contains("INVESTMENT_SESSION_VOIDED")
     }));
 }

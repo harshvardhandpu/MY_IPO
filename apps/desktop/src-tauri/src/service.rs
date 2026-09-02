@@ -23,6 +23,7 @@ use sanket_ranking::{DevRankingAlgorithm, RankingAlgorithm};
 
 pub const DEV_KEY_ID: &str = "dev-key-1";
 pub const PRODUCTION_KEY_ID: &str = "os-keyring:v1:identity-key-v1";
+pub const LOOKUP_AUTHORIZATION_LIFETIME_SECS: u64 = 300;
 
 fn allotment_rate_limiter() -> &'static sanket_allotment::ProviderRateLimiter {
     static LIMITER: OnceLock<sanket_allotment::ProviderRateLimiter> = OnceLock::new();
@@ -120,6 +121,21 @@ pub enum ServiceError {
 }
 
 pub type Result<T> = std::result::Result<T, ServiceError>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LookupAuthorizationRecord {
+    authorization_id: String,
+    application_id: String,
+    provider_id: String,
+    expiry_time: String,
+    expiry_epoch: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LookupAuthorizationState {
+    status: &'static str,
+    record: Option<LookupAuthorizationRecord>,
+}
 
 /// Shared application state: vault, projection index, and the dev key provider.
 pub struct Application {
@@ -340,14 +356,7 @@ impl Application {
             (RuntimeSecurityMode::ProductionSecure, "kfintech-live")
             | (RuntimeSecurityMode::ProductionSecure, "bigshare-live")
             | (RuntimeSecurityMode::ProductionSecure, "mufg-intime-live") => {
-                self.identity_key().map(|_| ())?;
-                if sanket_allotment::real_investor_lookup_allowed() {
-                    Ok(())
-                } else {
-                    Err(ServiceError::Invalid(
-                        "real investor lookup remains blocked pending the controlled pilot".into(),
-                    ))
-                }
+                self.identity_key().map(|_| ())
             }
             (RuntimeSecurityMode::ProductionSecure, "kfintech-fixture") => {
                 Err(ServiceError::Invalid(
@@ -1098,6 +1107,9 @@ impl Application {
         let provider_id = provider.as_str().to_owned();
         let official_status_url = Some(registrar.official_status_url.to_owned());
         self.validate_allotment_provider(&provider_id)?;
+        if matches!(self.security_mode, RuntimeSecurityMode::ProductionSecure) {
+            self.require_lookup_permit(&req.application_id, &provider_id)?;
+        }
         reject_embedded_pan("IPO name", &req.ipo_name)?;
         reject_embedded_pan("registrar id", &registrar_id)?;
         reject_embedded_pan("registrar name", &registrar_name)?;
@@ -1425,6 +1437,8 @@ impl Application {
         let mut rev = 3u64;
         let policy = sanket_allotment::ProviderRatePolicy::for_provider(provider_kind);
         let mut cancelled = false;
+        let mut lookup_permit = None;
+        let mut lookup_authorization_consumed = false;
 
         for account_id in &accounts {
             if self
@@ -1494,7 +1508,38 @@ impl Application {
             } else {
                 "AUTOMATED_PROVIDER"
             };
-            let prepared = provider.prepare_lookup(&ctx);
+            let prepare_denied = if provider_kind != sanket_allotment::ProviderId::KfintechFixture
+                && lookup_permit.is_none()
+            {
+                match self.require_lookup_permit(&req.application_id, &provider_id) {
+                    Ok(permit) => {
+                        lookup_permit = Some(permit);
+                        false
+                    }
+                    Err(_error)
+                        if self.security_mode == RuntimeSecurityMode::DevelopmentSynthetic =>
+                    {
+                        true
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                false
+            };
+            let prepared = if prepare_denied {
+                let error = if provider_kind == sanket_allotment::ProviderId::BigshareLive {
+                    sanket_allotment::ProviderError::NeedsHuman(
+                        "bigshare portal requires official human verification".into(),
+                    )
+                } else {
+                    sanket_allotment::ProviderError::Unavailable(
+                        "real investor lookup authorization is required".into(),
+                    )
+                };
+                Err(error)
+            } else {
+                provider.prepare_lookup(&ctx)
+            };
             let (status, lots, shares, pref, source) = match prepared {
                 Ok(Some(result)) => (
                     result.status().as_str().to_owned(),
@@ -1510,78 +1555,119 @@ impl Application {
                     None,
                     source.to_owned(),
                 ),
-                Ok(None)
-                    if provider_kind == sanket_allotment::ProviderId::KfintechFixture
-                        || sanket_allotment::real_investor_lookup_allowed() =>
-                {
-                    let envelope = self
-                        .vault
-                        .load_member_identity(account_id)
-                        .or_else(|_| self.vault.load_friend_identity(account_id))?;
-                    let masked_pan =
-                        sanket_identity_security::MaskedPan::from_display(masked.clone())
-                            .unwrap_or_else(|_| {
-                                sanket_identity_security::MaskedPan::from_parts("AAAAA", "A")
-                            });
-                    let record = sanket_identity_security::SensitiveIdentityRecord::from_stored(
-                        account_id.clone(),
-                        masked_pan,
-                        envelope,
-                    );
-                    let result = sensitive
-                        .with_pan(
-                            &record,
-                            sanket_identity_security::SensitivePurpose::AllotmentCheck,
-                            &req.actor_member_id,
-                            |pan_str| {
-                                let pan = Pan::parse(pan_str).map_err(|e| e.to_string())?;
-                                Ok(match provider.check_allotment(&ctx, &pan) {
-                                    Ok(result) => (
-                                        result.status().as_str().to_owned(),
-                                        result.allotted_lots(),
-                                        result.allotted_shares(),
-                                        result.provider_reference().map(str::to_owned),
-                                        source.to_owned(),
-                                    ),
-                                    Err(error) => (
-                                        error.to_status().as_str().to_owned(),
-                                        None,
-                                        None,
-                                        None,
-                                        source.to_owned(),
-                                    ),
-                                })
-                            },
+                Ok(None) => {
+                    let permit = if provider_kind == sanket_allotment::ProviderId::KfintechFixture {
+                        None
+                    } else if let Some(permit) = lookup_permit.clone() {
+                        Some(permit)
+                    } else {
+                        match self.require_lookup_permit(&req.application_id, &provider_id) {
+                            Ok(permit) => Some(permit),
+                            Err(_error)
+                                if self.security_mode
+                                    == RuntimeSecurityMode::DevelopmentSynthetic =>
+                            {
+                                None
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    };
+                    if provider_kind != sanket_allotment::ProviderId::KfintechFixture
+                        && permit.is_none()
+                    {
+                        (
+                            "PROVIDER_UNAVAILABLE".into(),
+                            None,
+                            None,
+                            None,
+                            source.to_owned(),
                         )
-                        .map_err(|error| ServiceError::Invalid(error.to_string()))?
-                        .map_err(ServiceError::Invalid)?;
-                    if let Some(audit) = sensitive.take_last_audit() {
-                        let audit_event = EventEnvelope::seal(NewEvent {
-                            event_id: String::new(),
-                            aggregate_type: "sensitive_identity".into(),
-                            aggregate_id: account_id.clone(),
-                            aggregate_revision: attempt_count as u64,
-                            actor_member_id: req.actor_member_id.clone(),
-                            device_id: self.device_id.clone(),
-                            occurred_at: audit.occurred_at,
-                            app_version: env!("CARGO_PKG_VERSION").into(),
-                            previous_event_hash: None,
-                            payload: EventPayload::SensitiveIdentityAccessed {
-                                account_id: audit.account_id,
-                                purpose: audit.purpose,
-                            },
-                        })?;
-                        self.append_and_project(&audit_event)?;
+                    } else {
+                        if provider_kind != sanket_allotment::ProviderId::KfintechFixture {
+                            self.validate_final_lookup_permit(
+                                permit.as_ref(),
+                                &req.application_id,
+                                &provider_id,
+                            )?;
+                        }
+                        if let Some(permit) = permit.as_ref() {
+                            if !lookup_authorization_consumed {
+                                self.consume_lookup_authorization(permit)?;
+                                lookup_authorization_consumed = true;
+                                lookup_permit = Some(permit.clone());
+                            }
+                        }
+                        let envelope = self
+                            .vault
+                            .load_member_identity(account_id)
+                            .or_else(|_| self.vault.load_friend_identity(account_id))?;
+                        let masked_pan =
+                            sanket_identity_security::MaskedPan::from_display(masked.clone())
+                                .unwrap_or_else(|_| {
+                                    sanket_identity_security::MaskedPan::from_parts("AAAAA", "A")
+                                });
+                        let record = sanket_identity_security::SensitiveIdentityRecord::from_stored(
+                            account_id.clone(),
+                            masked_pan,
+                            envelope,
+                        );
+                        let result = sensitive
+                            .with_pan(
+                                &record,
+                                sanket_identity_security::SensitivePurpose::AllotmentCheck,
+                                &req.actor_member_id,
+                                |pan_str| {
+                                    let pan = Pan::parse(pan_str).map_err(|e| e.to_string())?;
+                                    let provider_result = match permit.as_ref() {
+                                        Some(permit) => provider.check_allotment_with_permit(
+                                            &req.application_id,
+                                            &ctx,
+                                            &pan,
+                                            permit,
+                                        ),
+                                        None => provider.check_allotment(&ctx, &pan),
+                                    };
+                                    Ok(match provider_result {
+                                        Ok(result) => (
+                                            result.status().as_str().to_owned(),
+                                            result.allotted_lots(),
+                                            result.allotted_shares(),
+                                            result.provider_reference().map(str::to_owned),
+                                            source.to_owned(),
+                                        ),
+                                        Err(error) => (
+                                            error.to_status().as_str().to_owned(),
+                                            None,
+                                            None,
+                                            None,
+                                            source.to_owned(),
+                                        ),
+                                    })
+                                },
+                            )
+                            .map_err(|error| ServiceError::Invalid(error.to_string()))?
+                            .map_err(ServiceError::Invalid)?;
+                        if let Some(audit) = sensitive.take_last_audit() {
+                            let audit_event = EventEnvelope::seal(NewEvent {
+                                event_id: String::new(),
+                                aggregate_type: "sensitive_identity".into(),
+                                aggregate_id: account_id.clone(),
+                                aggregate_revision: attempt_count as u64,
+                                actor_member_id: req.actor_member_id.clone(),
+                                device_id: self.device_id.clone(),
+                                occurred_at: audit.occurred_at,
+                                app_version: env!("CARGO_PKG_VERSION").into(),
+                                previous_event_hash: None,
+                                payload: EventPayload::SensitiveIdentityAccessed {
+                                    account_id: audit.account_id,
+                                    purpose: audit.purpose,
+                                },
+                            })?;
+                            self.append_and_project(&audit_event)?;
+                        }
+                        result
                     }
-                    result
                 }
-                Ok(None) => (
-                    "PROVIDER_UNAVAILABLE".into(),
-                    None,
-                    None,
-                    None,
-                    source.to_owned(),
-                ),
             };
 
             let retryable = matches!(
@@ -1973,6 +2059,283 @@ impl Application {
         Ok(dto)
     }
 
+    fn application_provider_id(&self, application_id: &str) -> Result<String> {
+        let application = self
+            .index
+            .list_submitted_applications()?
+            .into_iter()
+            .find(|application| application.application_id == application_id)
+            .ok_or_else(|| ServiceError::Invalid("submitted application not found".into()))?;
+        let registrar =
+            sanket_allotment::ProviderRegistry::resolve_registrar(&application.registrar_id)
+                .ok_or_else(|| ServiceError::Invalid("unsupported registrar".into()))?;
+        Ok(
+            execution_provider_id(self.security_mode, registrar.provider_id)
+                .as_str()
+                .to_owned(),
+        )
+    }
+
+    fn lookup_authorization_state(
+        &self,
+        application_id: &str,
+        provider_id: &str,
+    ) -> Result<LookupAuthorizationState> {
+        let events = self.vault.list_events()?;
+        let owner_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::MemberCreated {
+                    member_id, role, ..
+                } if *role == Role::Owner => Some(member_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut grants = Vec::new();
+        let mut consumed = Vec::new();
+        for event in &events {
+            match event.payload() {
+                EventPayload::LookupAuthorizationGranted {
+                    authorization_id,
+                    application_id: event_application_id,
+                    provider_id: event_provider_id,
+                    expiry_time,
+                } if event_application_id == application_id
+                    && event_provider_id == provider_id
+                    && owner_ids.contains(&event.actor_member_id()) =>
+                {
+                    grants.push(LookupAuthorizationRecord {
+                        authorization_id: authorization_id.clone(),
+                        application_id: event_application_id.clone(),
+                        provider_id: event_provider_id.clone(),
+                        expiry_time: expiry_time.clone(),
+                        expiry_epoch: expiry_time.parse().unwrap_or(0),
+                    });
+                }
+                EventPayload::LookupAuthorizationConsumed {
+                    authorization_id,
+                    application_id: event_application_id,
+                    provider_id: event_provider_id,
+                    ..
+                } if event_application_id == application_id && event_provider_id == provider_id => {
+                    consumed.push(authorization_id.as_str());
+                }
+                _ => {}
+            }
+        }
+        let record = grants
+            .into_iter()
+            .rev()
+            .find(|grant| !consumed.contains(&grant.authorization_id.as_str()));
+        let Some(record) = record else {
+            return Ok(LookupAuthorizationState {
+                status: "NOT_GRANTED",
+                record: None,
+            });
+        };
+        let status = if record.expiry_epoch > epoch_secs() {
+            "ACTIVE"
+        } else {
+            "EXPIRED"
+        };
+        Ok(LookupAuthorizationState {
+            status,
+            record: Some(record),
+        })
+    }
+
+    fn require_lookup_permit(
+        &self,
+        application_id: &str,
+        provider_id: &str,
+    ) -> Result<sanket_allotment::RealInvestorLookupPermit> {
+        if !matches!(self.security_mode, RuntimeSecurityMode::ProductionSecure) {
+            return Err(ServiceError::Invalid(
+                "real investor lookup requires PRODUCTION_SECURE".into(),
+            ));
+        }
+        let security = self.security_status()?;
+        if security.key_provider != "os-keyring" || !security.real_pan_allowed {
+            return Err(ServiceError::Invalid(
+                "real investor lookup requires an active OS keyring".into(),
+            ));
+        }
+        if provider_id.ends_with("-fixture") {
+            return Err(ServiceError::Invalid(
+                "real investor lookup cannot use a fixture provider".into(),
+            ));
+        }
+        let state = self.lookup_authorization_state(application_id, provider_id)?;
+        let record = state.record.ok_or_else(|| {
+            ServiceError::Invalid("real investor lookup authorization is not granted".into())
+        })?;
+        if state.status != "ACTIVE" {
+            return Err(ServiceError::Invalid(
+                "real investor lookup authorization is expired".into(),
+            ));
+        }
+        sanket_allotment::RealInvestorLookupPermit::new(
+            record.authorization_id,
+            record.application_id,
+            record.provider_id,
+        )
+        .map_err(|error| ServiceError::Invalid(error.to_string()))
+    }
+
+    fn validate_final_lookup_permit(
+        &self,
+        permit: Option<&sanket_allotment::RealInvestorLookupPermit>,
+        application_id: &str,
+        provider_id: &str,
+    ) -> Result<()> {
+        if !matches!(self.security_mode, RuntimeSecurityMode::ProductionSecure) {
+            return Err(ServiceError::Invalid(
+                "real investor lookup requires PRODUCTION_SECURE".into(),
+            ));
+        }
+        let security = self.security_status()?;
+        if security.key_provider != "os-keyring" || !security.real_pan_allowed {
+            return Err(ServiceError::Invalid(
+                "real investor lookup requires an active OS keyring".into(),
+            ));
+        }
+        let permit = permit.ok_or_else(|| {
+            ServiceError::Invalid("real investor lookup authorization is not granted".into())
+        })?;
+        if !permit.matches(application_id, provider_id) {
+            return Err(ServiceError::Invalid(
+                "real investor lookup permit scope mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn consume_lookup_authorization(
+        &self,
+        permit: &sanket_allotment::RealInvestorLookupPermit,
+    ) -> Result<()> {
+        let state =
+            self.lookup_authorization_state(permit.application_id(), permit.provider_id())?;
+        let record = state.record.ok_or_else(|| {
+            ServiceError::Invalid("real investor lookup authorization is not granted".into())
+        })?;
+        if state.status != "ACTIVE" || record.authorization_id != permit.authorization_id() {
+            return Err(ServiceError::Invalid(
+                "real investor lookup authorization is no longer active".into(),
+            ));
+        }
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "lookup_authorization".into(),
+            aggregate_id: permit.authorization_id().into(),
+            aggregate_revision: 2,
+            actor_member_id: "SYSTEM".into(),
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::LookupAuthorizationConsumed {
+                authorization_id: permit.authorization_id().into(),
+                application_id: permit.application_id().into(),
+                provider_id: permit.provider_id().into(),
+                timestamp: Self::now(),
+            },
+        })?;
+        self.append_and_project(&event)
+    }
+
+    pub fn get_lookup_authorization_status(
+        &self,
+        application_id: &str,
+    ) -> Result<LookupAuthorizationStatusDto> {
+        let provider_id = self.application_provider_id(application_id)?;
+        let state = self.lookup_authorization_state(application_id, &provider_id)?;
+        Ok(LookupAuthorizationStatusDto {
+            provider_id,
+            status: state.status.into(),
+            authorization_id: state
+                .record
+                .as_ref()
+                .map(|record| record.authorization_id.clone()),
+            expiry_time: state.record.map(|record| record.expiry_time),
+        })
+    }
+
+    pub fn authorize_real_investor_lookup(
+        &self,
+        req: LookupAuthorizationRequest,
+    ) -> Result<LookupAuthorizationStatusDto> {
+        if !req.owner_affirmed {
+            return Err(ServiceError::Invalid(
+                "explicit owner confirmation is required".into(),
+            ));
+        }
+        if !matches!(self.security_mode, RuntimeSecurityMode::ProductionSecure) {
+            return Err(ServiceError::Invalid(
+                "real investor lookup requires PRODUCTION_SECURE".into(),
+            ));
+        }
+        let security = self.security_status()?;
+        if security.key_provider != "os-keyring" || !security.real_pan_allowed {
+            return Err(ServiceError::Invalid(
+                "real investor lookup requires an active OS keyring".into(),
+            ));
+        }
+        let events = self.vault.list_events()?;
+        let owner_ok = events.iter().any(|event| {
+            event.actor_member_id() == req.actor_member_id.as_str()
+                && matches!(
+                    event.payload(),
+                    EventPayload::MemberCreated {
+                        member_id,
+                        role: Role::Owner,
+                        ..
+                    } if member_id == &req.actor_member_id
+                )
+        });
+        if !owner_ok {
+            return Err(ServiceError::Invalid(
+                "only an owner may authorize a real investor lookup".into(),
+            ));
+        }
+        let provider_id = self.application_provider_id(&req.application_id)?;
+        self.validate_allotment_provider(&provider_id)?;
+        let state = self.lookup_authorization_state(&req.application_id, &provider_id)?;
+        if state.status == "ACTIVE" {
+            return Err(ServiceError::Invalid(
+                "a lookup authorization is already active".into(),
+            ));
+        }
+        let authorization_id = format!("lookup-auth-{}", uuid::Uuid::now_v7());
+        let expiry_time = epoch_secs()
+            .saturating_add(LOOKUP_AUTHORIZATION_LIFETIME_SECS)
+            .to_string();
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: String::new(),
+            aggregate_type: "lookup_authorization".into(),
+            aggregate_id: authorization_id.clone(),
+            aggregate_revision: 1,
+            actor_member_id: req.actor_member_id,
+            device_id: self.device_id.clone(),
+            occurred_at: Self::now(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::LookupAuthorizationGranted {
+                authorization_id: authorization_id.clone(),
+                application_id: req.application_id.clone(),
+                provider_id: provider_id.clone(),
+                expiry_time: expiry_time.clone(),
+            },
+        })?;
+        self.append_and_project(&event)?;
+        Ok(LookupAuthorizationStatusDto {
+            provider_id,
+            status: "ACTIVE".into(),
+            authorization_id: Some(authorization_id),
+            expiry_time: Some(expiry_time),
+        })
+    }
+
     pub fn security_status(&self) -> Result<SecurityStatusDto> {
         let keyring_ready = match self.security_mode {
             RuntimeSecurityMode::DevelopmentSynthetic => false,
@@ -2222,6 +2585,13 @@ pub struct StartAllotmentRequest {
     pub registrar_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LookupAuthorizationRequest {
+    pub application_id: String,
+    pub actor_member_id: String,
+    pub owner_affirmed: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AllotmentReportRow {
     pub attempt_id: String,
@@ -2307,4 +2677,190 @@ pub struct SecurityStatusDto {
     pub real_pan_allowed: bool,
     pub os_keyring_release_blocker: bool,
     pub blocker: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LookupAuthorizationStatusDto {
+    pub provider_id: String,
+    pub status: String,
+    pub authorization_id: Option<String>,
+    pub expiry_time: Option<String>,
+}
+
+#[cfg(test)]
+mod lookup_authorization_tests {
+    use super::*;
+
+    fn test_app(mode: RuntimeSecurityMode) -> (Application, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("sanket-lookup-auth-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test root");
+        let app = Application::with_mode(
+            "test-device".into(),
+            root.join("vault"),
+            root.join("index.sqlite"),
+            mode,
+        )
+        .expect("application");
+        (app, root)
+    }
+
+    fn event(id: &str, actor: &str, payload: EventPayload) -> EventEnvelope {
+        EventEnvelope::seal(NewEvent {
+            event_id: id.into(),
+            aggregate_type: "lookup_authorization".into(),
+            aggregate_id: "lookup-auth-1".into(),
+            aggregate_revision: 1,
+            actor_member_id: actor.into(),
+            device_id: "test-device".into(),
+            occurred_at: "1788210900".into(),
+            app_version: "0.1.0".into(),
+            previous_event_hash: None,
+            payload,
+        })
+        .expect("event")
+    }
+
+    #[test]
+    fn development_mode_denies_lookup_authorization() {
+        let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
+        let error = app
+            .authorize_real_investor_lookup(LookupAuthorizationRequest {
+                application_id: "application-1".into(),
+                actor_member_id: "owner-1".into(),
+                owner_affirmed: true,
+            })
+            .expect_err("development mode must deny");
+        assert!(error.to_string().contains("PRODUCTION_SECURE"));
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn production_without_keyring_denies_lookup_authorization() {
+        let (app, root) = test_app(RuntimeSecurityMode::ProductionSecure);
+        let security = app.security_status().expect("security status");
+        assert!(!security.real_pan_allowed);
+        let error = app
+            .authorize_real_investor_lookup(LookupAuthorizationRequest {
+                application_id: "application-1".into(),
+                actor_member_id: "owner-1".into(),
+                owner_affirmed: true,
+            })
+            .expect_err("missing keyring must deny");
+        assert!(matches!(error, ServiceError::Invalid(_)));
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn production_lookup_requires_owner_confirmation() {
+        let (app, root) = test_app(RuntimeSecurityMode::ProductionSecure);
+        let error = app
+            .authorize_real_investor_lookup(LookupAuthorizationRequest {
+                application_id: "application-1".into(),
+                actor_member_id: "owner-1".into(),
+                owner_affirmed: false,
+            })
+            .expect_err("missing owner confirmation must deny");
+        assert!(error.to_string().contains("confirmation"));
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expired_lookup_authorization_is_denied_by_event_replay() {
+        let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
+        app.vault
+            .append_event(&event(
+                "owner-1",
+                "owner-1",
+                EventPayload::MemberCreated {
+                    member_id: "owner-1".into(),
+                    display_name: "Owner".into(),
+                    role: Role::Owner,
+                },
+            ))
+            .expect("owner");
+        app.vault
+            .append_event(&event(
+                "grant-1",
+                "owner-1",
+                EventPayload::LookupAuthorizationGranted {
+                    authorization_id: "lookup-auth-1".into(),
+                    application_id: "application-1".into(),
+                    provider_id: "mufg-intime-live".into(),
+                    expiry_time: "0".into(),
+                },
+            ))
+            .expect("grant");
+        let state = app
+            .lookup_authorization_state("application-1", "mufg-intime-live")
+            .expect("state");
+        assert_eq!(state.status, "EXPIRED");
+        assert!(
+            app.require_lookup_permit("application-1", "mufg-intime-live")
+                .is_err()
+        );
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn valid_owner_authorization_yields_scoped_runtime_permit() {
+        let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
+        app.vault
+            .append_event(&event(
+                "owner-1",
+                "owner-1",
+                EventPayload::MemberCreated {
+                    member_id: "owner-1".into(),
+                    display_name: "Owner".into(),
+                    role: Role::Owner,
+                },
+            ))
+            .expect("owner");
+        app.vault
+            .append_event(&event(
+                "grant-1",
+                "owner-1",
+                EventPayload::LookupAuthorizationGranted {
+                    authorization_id: "lookup-auth-1".into(),
+                    application_id: "application-1".into(),
+                    provider_id: "mufg-intime-live".into(),
+                    expiry_time: (epoch_secs() + LOOKUP_AUTHORIZATION_LIFETIME_SECS).to_string(),
+                },
+            ))
+            .expect("grant");
+        let state = app
+            .lookup_authorization_state("application-1", "mufg-intime-live")
+            .expect("state");
+        assert_eq!(state.status, "ACTIVE");
+        let permit = sanket_allotment::RealInvestorLookupPermit::new(
+            "lookup-auth-1",
+            "application-1",
+            "mufg-intime-live",
+        )
+        .expect("permit");
+        assert!(permit.matches("application-1", "mufg-intime-live"));
+        assert!(!permit.matches("other-application", "mufg-intime-live"));
+        app.consume_lookup_authorization(&permit)
+            .expect("consume authorization");
+        let consumed = app
+            .lookup_authorization_state("application-1", "mufg-intime-live")
+            .expect("consumed state");
+        assert_eq!(consumed.status, "NOT_GRANTED");
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn final_permit_check_precedes_pan_access() {
+        let source = include_str!("service.rs");
+        let permit_check = source
+            .find("self.validate_final_lookup_permit(")
+            .expect("final permit check");
+        let pan_access = source.find(".with_pan(").expect("PAN boundary");
+        assert!(permit_check < pan_access);
+    }
 }

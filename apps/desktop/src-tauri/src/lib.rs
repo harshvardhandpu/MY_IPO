@@ -15,9 +15,10 @@ use provider_credentials::{
 use service::{
     AddFriendRequest, AddFriendResponse, AllotmentCandidateRow, AllotmentJobReport, Application,
     CheckRequest, CheckResponse, Dashboard, EstimateProfitRequest, EstimatedProfitDto, FriendRow,
-    HistoricalApplicationRequest, HistoricalApplicationResponse, ManualAllotmentRequest, MemberRow,
-    OnboardMemberRequest, OnboardMemberResponse, SecurityStatusDto, StartAllotmentRequest,
-    SubmitRequest, SubmitResponse, VoidSessionRequest, VoidSessionResponse,
+    HistoricalApplicationRequest, HistoricalApplicationResponse, LookupAuthorizationRequest,
+    LookupAuthorizationStatusDto, ManualAllotmentRequest, MemberRow, OnboardMemberRequest,
+    OnboardMemberResponse, SecurityStatusDto, StartAllotmentRequest, SubmitRequest, SubmitResponse,
+    VoidSessionRequest, VoidSessionResponse,
 };
 use upstox::{IpoCatalogItemDto, IpoCatalogueDto, IpoListQuery};
 
@@ -294,6 +295,28 @@ fn get_security_status(state: tauri::State<'_, AppState>) -> Result<SecurityStat
 }
 
 #[tauri::command]
+fn get_lookup_authorization_status(
+    state: tauri::State<'_, AppState>,
+    application_id: String,
+) -> Result<LookupAuthorizationStatusDto, String> {
+    state
+        .application()?
+        .get_lookup_authorization_status(&application_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn authorize_real_investor_lookup(
+    state: tauri::State<'_, AppState>,
+    request: LookupAuthorizationRequest,
+) -> Result<LookupAuthorizationStatusDto, String> {
+    state
+        .application()?
+        .authorize_real_investor_lookup(request)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_upstox_connection_status(state: tauri::State<'_, AppState>) -> ProviderConnectionStatusDto {
     status(&state.provider_credentials)
 }
@@ -394,6 +417,8 @@ pub fn run() {
             record_manual_allotment,
             estimate_profit,
             get_security_status,
+            get_lookup_authorization_status,
+            authorize_real_investor_lookup,
             get_upstox_connection_status,
             connect_upstox_analytics_token,
             replace_upstox_analytics_token,

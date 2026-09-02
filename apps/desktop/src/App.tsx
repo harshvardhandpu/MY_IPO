@@ -223,6 +223,13 @@ interface SecurityStatus {
   blocker?: string | null;
 }
 
+interface LookupAuthorizationStatus {
+  provider_id: string;
+  status: "NOT_GRANTED" | "ACTIVE" | "EXPIRED";
+  authorization_id?: string | null;
+  expiry_time?: string | null;
+}
+
 interface UpstoxConnectionStatus {
   provider: "UPSTOX_IPO_DATA";
   state: "NOT_CONNECTED" | "CONNECTED" | "FAILED";
@@ -2565,6 +2572,11 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [lookupAuthorization, setLookupAuthorization] = useState<LookupAuthorizationStatus | null>(
+    null,
+  );
+  const [lookupConfirmed, setLookupConfirmed] = useState(false);
+  const [lookupBusy, setLookupBusy] = useState(false);
   const [manualAccountId, setManualAccountId] = useState("");
   const [manualResult, setManualResult] = useState("NOT_ALLOTTED");
   const [manualLots, setManualLots] = useState("");
@@ -2598,6 +2610,32 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
         ),
       );
   }, [bridge]);
+
+  useEffect(() => {
+    const candidate = candidates.find((item) => item.application_id === selected);
+    setLookupAuthorization(null);
+    setLookupConfirmed(false);
+    if (!candidate) return;
+    let active = true;
+    bridge
+      .invoke<LookupAuthorizationStatus>("get_lookup_authorization_status", {
+        application_id: candidate.application_id,
+      })
+      .then((status) => {
+        if (active) setLookupAuthorization(status);
+      })
+      .catch(() => {
+        if (active) {
+          setLookupAuthorization({
+            provider_id: candidate.provider_id,
+            status: "NOT_GRANTED",
+          });
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [bridge, candidates, selected]);
 
   useEffect(() => {
     if (
@@ -2658,6 +2696,34 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
     }
   }
 
+  async function authorizeLookup() {
+    const candidate = candidates.find((c) => c.application_id === selected);
+    const owner = members.find((member) => member.role === "OWNER");
+    if (!candidate || !owner || !lookupConfirmed) return;
+    setLookupBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const next = await bridge.invoke<LookupAuthorizationStatus>(
+        "authorize_real_investor_lookup",
+        {
+          request: {
+            application_id: candidate.application_id,
+            actor_member_id: owner.id,
+            owner_affirmed: true,
+          },
+        },
+      );
+      setLookupAuthorization(next);
+      setLookupConfirmed(false);
+      setMessage("One real investor lookup authorized through the owner-controlled gate.");
+    } catch (cause) {
+      setError(userFacingError(cause, "The real investor lookup could not be authorized."));
+    } finally {
+      setLookupBusy(false);
+    }
+  }
+
   async function saveManualResult(event: FormEvent) {
     event.preventDefault();
     if (!report || !manualAccountId) return;
@@ -2684,8 +2750,66 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
     }
   }
 
+  const selectedCandidate = candidates.find((candidate) => candidate.application_id === selected);
+  const owner = members.find((member) => member.role === "OWNER");
+  const securityReady = security?.mode === "PRODUCTION_SECURE" && security.real_pan_allowed;
+  const keyringReady = security?.key_provider === "os-keyring" && security.real_pan_allowed;
+
   return (
     <div className="page-content">
+      {owner && (
+        <section aria-label="Real Investor Lookup" className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Owner control</p>
+              <h2>Real Investor Lookup</h2>
+              <p>
+                A separate, one-shot authorization is required before any production PAN lookup. It
+                expires after five minutes and is never stored in SQLite.
+              </p>
+            </div>
+          </div>
+          <dl className="ipo-detail-grid">
+            <div>
+              <dt>Security</dt>
+              <dd>{securityReady ? "PASS" : "FAIL"}</dd>
+            </div>
+            <div>
+              <dt>Keyring</dt>
+              <dd>{keyringReady ? "PASS" : "FAIL"}</dd>
+            </div>
+            <div>
+              <dt>Lookup Authorization</dt>
+              <dd>{lookupAuthorization?.status ?? "NOT_GRANTED"}</dd>
+            </div>
+          </dl>
+          <label className="choice-row">
+            <input
+              checked={lookupConfirmed}
+              onChange={(event) => setLookupConfirmed(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              <strong>I explicitly authorize one real investor lookup</strong>
+              <small>The selected application and its resolved registrar are the scope.</small>
+            </span>
+          </label>
+          <button
+            className="secondary-button"
+            disabled={
+              !lookupConfirmed ||
+              lookupBusy ||
+              !selectedCandidate ||
+              !securityReady ||
+              lookupAuthorization?.status === "ACTIVE"
+            }
+            onClick={() => void authorizeLookup()}
+            type="button"
+          >
+            {lookupBusy ? "Authorizing…" : "Authorize One Lookup"}
+          </button>
+        </section>
+      )}
       <section className="panel">
         <div className="panel-heading">
           <div>

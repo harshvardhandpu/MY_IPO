@@ -570,11 +570,13 @@ fn unattended_check_fails_closed_pending_transport() {
 }
 
 #[test]
-#[allow(clippy::assertions_on_constants)]
-fn implemented_transport_does_not_authorize_real_lookup() {
-    assert!(sanket_allotment::LIVE_TRANSPORT_IMPLEMENTED);
-    assert!(!sanket_allotment::REAL_INVESTOR_LOOKUP_AUTHORIZED);
-    assert!(!sanket_allotment::real_investor_lookup_allowed());
+fn implemented_transport_requires_runtime_permit() {
+    let provider = mufg_provider();
+    let pan = Pan::parse("ABCDE1234F").expect("synthetic PAN");
+    let err = provider
+        .check_allotment(&lookup_context(), &pan)
+        .expect_err("direct MUFG lookup must remain deny-by-default");
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::RetryableError);
 }
 
 #[test]

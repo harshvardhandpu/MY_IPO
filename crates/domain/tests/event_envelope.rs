@@ -77,3 +77,59 @@ fn legacy_ipo_event_without_metadata_keeps_its_hash() {
             .expect("legacy hash should verify")
     );
 }
+
+#[test]
+fn lookup_authorization_event_names_and_payload_are_safe() {
+    let granted = EventPayload::LookupAuthorizationGranted {
+        authorization_id: "lookup-auth-1".into(),
+        application_id: "application-1".into(),
+        provider_id: "mufg-intime-live".into(),
+        expiry_time: "1788211200".into(),
+    };
+    let consumed = EventPayload::LookupAuthorizationConsumed {
+        authorization_id: "lookup-auth-1".into(),
+        application_id: "application-1".into(),
+        provider_id: "mufg-intime-live".into(),
+        timestamp: "1788210900".into(),
+    };
+
+    let granted_envelope = EventEnvelope::seal(NewEvent {
+        event_id: "lookup-granted-1".into(),
+        aggregate_type: "lookup_authorization".into(),
+        aggregate_id: "lookup-auth-1".into(),
+        aggregate_revision: 1,
+        actor_member_id: "member-1".into(),
+        device_id: "device-1".into(),
+        occurred_at: "1788210900".into(),
+        app_version: "0.1.0".into(),
+        previous_event_hash: None,
+        payload: granted.clone(),
+    })
+    .expect("seal granted");
+    let consumed_envelope = EventEnvelope::seal(NewEvent {
+        event_id: "lookup-consumed-1".into(),
+        aggregate_type: "lookup_authorization".into(),
+        aggregate_id: "lookup-auth-1".into(),
+        aggregate_revision: 2,
+        actor_member_id: "SYSTEM".into(),
+        device_id: "device-1".into(),
+        occurred_at: "1788210901".into(),
+        app_version: "0.1.0".into(),
+        previous_event_hash: None,
+        payload: consumed.clone(),
+    })
+    .expect("seal consumed");
+
+    assert_eq!(
+        granted_envelope.event_type(),
+        "LOOKUP_AUTHORIZATION_GRANTED"
+    );
+    assert_eq!(
+        consumed_envelope.event_type(),
+        "LOOKUP_AUTHORIZATION_CONSUMED"
+    );
+    let json = serde_json::to_string(&(granted, consumed)).expect("serialize");
+    assert!(!json.to_ascii_lowercase().contains("pan"));
+    assert!(!json.to_ascii_lowercase().contains("token"));
+    assert!(!json.to_ascii_lowercase().contains("credential"));
+}

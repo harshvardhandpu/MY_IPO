@@ -167,3 +167,37 @@ fn profile_ids_reject_path_traversal() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn list_events_reads_only_integrity_verified_events() {
+    use sanket_domain::{EventEnvelope, EventPayload, NewEvent};
+
+    let root = temp_root("events");
+    let vault = MemberVault::open(&root).expect("open");
+    let event = EventEnvelope::seal(NewEvent {
+        event_id: "lookup-event-1".into(),
+        aggregate_type: "lookup_authorization".into(),
+        aggregate_id: "lookup-auth-1".into(),
+        aggregate_revision: 1,
+        actor_member_id: "member-1".into(),
+        device_id: "device-1".into(),
+        occurred_at: "1788210900".into(),
+        app_version: "0.1.0".into(),
+        previous_event_hash: None,
+        payload: EventPayload::LookupAuthorizationGranted {
+            authorization_id: "lookup-auth-1".into(),
+            application_id: "application-1".into(),
+            provider_id: "mufg-intime-live".into(),
+            expiry_time: "1788211200".into(),
+        },
+    })
+    .expect("seal");
+    vault.append_event(&event).expect("append");
+
+    let events = vault.list_events().expect("list");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type(), "LOOKUP_AUTHORIZATION_GRANTED");
+    assert!(events[0].verify_integrity().expect("verify"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -56,6 +56,20 @@ pub enum EventPayload {
         account_id: String,
         purpose: String,
     },
+    /// Owner granted one bounded real-investor lookup. Contains no PAN or credential.
+    LookupAuthorizationGranted {
+        authorization_id: String,
+        application_id: String,
+        provider_id: String,
+        expiry_time: String,
+    },
+    /// The bounded lookup authorization was consumed immediately before PAN access.
+    LookupAuthorizationConsumed {
+        authorization_id: String,
+        application_id: String,
+        provider_id: String,
+        timestamp: String,
+    },
     /// Member onboarded. Carries display name only — never PAN/UPI/email.
     MemberCreated {
         member_id: String,
@@ -218,6 +232,8 @@ impl EventPayload {
             Self::DeviceRegistered { .. } => "DEVICE_REGISTERED",
             Self::SettingsInitialized { .. } => "SETTINGS_INITIALIZED",
             Self::SensitiveIdentityAccessed { .. } => "SENSITIVE_IDENTITY_ACCESSED",
+            Self::LookupAuthorizationGranted { .. } => "LOOKUP_AUTHORIZATION_GRANTED",
+            Self::LookupAuthorizationConsumed { .. } => "LOOKUP_AUTHORIZATION_CONSUMED",
             Self::MemberCreated { .. } => "MEMBER_CREATED",
             Self::FriendAdded { .. } => "FRIEND_ADDED",
             Self::FriendArchived { .. } => "FRIEND_ARCHIVED",

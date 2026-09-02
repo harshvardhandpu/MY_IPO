@@ -36,6 +36,10 @@ pub enum MemberVaultError {
     Io(#[from] std::io::Error),
     #[error("member vault serialization failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("member vault event error: {0}")]
+    Event(#[from] sanket_domain::EventError),
+    #[error("member vault event integrity check failed: {0}")]
+    EventIntegrity(String),
     #[error("invalid member/friend id: {0}")]
     InvalidId(String),
     #[error("unsupported identity envelope version {0}")]
@@ -138,6 +142,30 @@ impl MemberVault {
         fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{}.json", event.event_id()));
         Ok(write_atomically(&path, &serde_json::to_vec(event)?)?)
+    }
+
+    /// Load and integrity-check the append-only event log.
+    pub fn list_events(&self) -> Result<Vec<EventEnvelope>, MemberVaultError> {
+        let dir = self.root.join("_events");
+        let mut events = Vec::new();
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(events),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let event: EventEnvelope = serde_json::from_slice(&fs::read(&path)?)?;
+            if !event.verify_integrity()? {
+                return Err(MemberVaultError::EventIntegrity(path.display().to_string()));
+            }
+            events.push(event);
+        }
+        events.sort_by(|left, right| left.event_id().cmp(right.event_id()));
+        Ok(events)
     }
 
     fn member_profiles_dir(&self) -> PathBuf {

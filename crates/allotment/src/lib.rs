@@ -33,8 +33,8 @@ pub use provider::{
     HumanVerificationType, IssueDiscoveryMode, LookupKeyKind, NegativeResultProof,
     NegativeResultProofError, ProviderAllotmentResult, ProviderCapabilities,
     ProviderContinuationReference, ProviderError, ProviderHealth, ProviderResultProvenance,
-    ProviderTransportKind, RegistrarIssue, SafeProviderMetadataError, SanitizedFixtureProvenance,
-    SessionRequirement,
+    ProviderTransportKind, RealInvestorLookupPermit, RegistrarIssue, SafeProviderMetadataError,
+    SanitizedFixtureProvenance, SessionRequirement,
 };
 pub use registry::{ProviderDescriptor, ProviderId, ProviderRegistry};
 pub use runtime::{JobLease, ProviderRateLimiter, ProviderRatePolicy};
@@ -43,8 +43,3 @@ pub use status::NormalizedAllotmentStatus;
 /// Build readiness and investor-data authorization are separate security gates.
 pub const LIVE_TRANSPORT_IMPLEMENTED: bool = true;
 pub const LIVE_ADAPTER_IMPLEMENTED: bool = LIVE_TRANSPORT_IMPLEMENTED;
-pub const REAL_INVESTOR_LOOKUP_AUTHORIZED: bool = false;
-
-pub const fn real_investor_lookup_allowed() -> bool {
-    LIVE_TRANSPORT_IMPLEMENTED && REAL_INVESTOR_LOOKUP_AUTHORIZED
-}

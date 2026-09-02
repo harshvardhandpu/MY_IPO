@@ -353,6 +353,51 @@ pub struct AllotmentLookupContext {
     pub issue: RegistrarIssue,
 }
 
+/// Runtime proof that the application service validated one owner-approved,
+/// bounded real-investor lookup. It carries identifiers only — never PAN or
+/// provider credentials.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealInvestorLookupPermit {
+    authorization_id: String,
+    application_id: String,
+    provider_id: String,
+}
+
+impl RealInvestorLookupPermit {
+    pub fn new(
+        authorization_id: impl Into<String>,
+        application_id: impl Into<String>,
+        provider_id: impl Into<String>,
+    ) -> Result<Self, SafeProviderMetadataError> {
+        let permit = Self {
+            authorization_id: authorization_id.into(),
+            application_id: application_id.into(),
+            provider_id: provider_id.into(),
+        };
+        (is_safe_identifier(&permit.authorization_id)
+            && is_safe_identifier(&permit.application_id)
+            && is_safe_identifier(&permit.provider_id))
+        .then_some(permit)
+        .ok_or(SafeProviderMetadataError)
+    }
+
+    pub fn authorization_id(&self) -> &str {
+        &self.authorization_id
+    }
+
+    pub fn application_id(&self) -> &str {
+        &self.application_id
+    }
+
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    pub fn matches(&self, application_id: &str, provider_id: &str) -> bool {
+        self.application_id == application_id && self.provider_id == provider_id
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProviderResultProvenance {
@@ -643,6 +688,23 @@ pub trait AllotmentProvider: Send + Sync {
         context: &AllotmentLookupContext,
         pan: &Pan,
     ) -> Result<ProviderAllotmentResult, ProviderError>;
+
+    /// Runtime-authorized PAN lookup. The application service must validate the
+    /// event-backed permit before calling this method.
+    fn check_allotment_with_permit(
+        &self,
+        application_id: &str,
+        context: &AllotmentLookupContext,
+        pan: &Pan,
+        permit: &RealInvestorLookupPermit,
+    ) -> Result<ProviderAllotmentResult, ProviderError> {
+        if !permit.matches(application_id, self.provider_id()) {
+            return Err(ProviderError::Retryable(
+                "real investor lookup permit scope mismatch".into(),
+            ));
+        }
+        self.check_allotment(context, pan)
+    }
 }
 
 /// Deterministic fixture provider for CI and local synthetic runs.

@@ -860,7 +860,9 @@ impl LocalIndex {
             sanket_domain::EventPayload::InvestmentRecommendationApplied { .. }
             | sanket_domain::EventPayload::DeviceRegistered { .. }
             | sanket_domain::EventPayload::SettingsInitialized { .. }
-            | sanket_domain::EventPayload::SensitiveIdentityAccessed { .. } => {
+            | sanket_domain::EventPayload::SensitiveIdentityAccessed { .. }
+            | sanket_domain::EventPayload::LookupAuthorizationGranted { .. }
+            | sanket_domain::EventPayload::LookupAuthorizationConsumed { .. } => {
                 // Projected elsewhere or audit-only; keep idempotent event mark.
             }
         }

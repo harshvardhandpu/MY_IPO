@@ -294,8 +294,15 @@ fn sanitized_fixture_provenance_is_complete() {
 }
 
 #[test]
-fn implemented_live_adapter_does_not_authorize_real_lookup() {
-    assert!(!sanket_allotment::real_investor_lookup_allowed());
+fn runtime_lookup_permit_requires_safe_scope() {
+    use sanket_allotment::RealInvestorLookupPermit;
+
+    assert!(RealInvestorLookupPermit::new("", "app-1", "mufg-intime-live").is_err());
+    assert!(
+        RealInvestorLookupPermit::new("auth-1", "app-1", "mufg-intime-live")
+            .unwrap()
+            .matches("app-1", "mufg-intime-live")
+    );
 }
 
 #[test]
