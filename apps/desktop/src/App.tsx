@@ -1,5 +1,29 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+import { PageTransition } from "./components/motion/PageTransition";
+import { SceneBoundary } from "./components/motion/SceneBoundary";
+import { Badge } from "./components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "./components/ui/tooltip";
+import { WeebScene } from "./WeebScene";
+
+const CinematicScene = lazy(() =>
+  import("./scenes/CinematicScene").catch(() => ({ default: () => null })),
+);
 
 export interface CommandBridge {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -584,12 +608,20 @@ function AppShell({
 
   return (
     <div className="app-shell">
+      <SceneBoundary fallback={<WeebScene />}>
+        <Suspense fallback={<WeebScene />}>
+          <CinematicScene view={active} />
+        </Suspense>
+      </SceneBoundary>
       <aside className="sidebar">
         <div className="brand-row">
           <Mark />
           <div>
             <strong>Sanket IPO</strong>
             <span>Private investment ledger</span>
+            <span className="brand-kana" aria-hidden="true">
+              サンケット
+            </span>
           </div>
         </div>
         <nav aria-label="Primary navigation">
@@ -635,14 +667,23 @@ function AppShell({
       <main className="app-main">
         <header className="topbar">
           <div className="topbar-status">
-            <span className="saved-status">
+            <Badge className="saved-status" variant="outline">
               <span aria-hidden="true" /> Saved locally
-            </span>
-            <span className="sync-status">Pending sync</span>
+            </Badge>
+            <Badge className="sync-status" variant="warning">
+              Pending sync
+            </Badge>
           </div>
-          <span className="topbar-seal">PRIVATE / LOCAL / AUDITED</span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="topbar-seal">PRIVATE / LOCAL / AUDITED</span>
+            </TooltipTrigger>
+            <TooltipContent>
+              Private ledger — encrypted local vault with append-only audit history
+            </TooltipContent>
+          </Tooltip>
         </header>
-        {children}
+        <PageTransition pageKey={active}>{children}</PageTransition>
       </main>
     </div>
   );
@@ -730,9 +771,12 @@ function SettingsView({ bridge }: { bridge: CommandBridge }) {
             <span className="eyebrow">Read-only provider</span>
             <h2 id="upstox-heading">Upstox IPO Data</h2>
           </div>
-          <span className={`status-badge ${connected ? "positive" : "warning"}`}>
+          <Badge
+            className={`status-badge ${connected ? "positive" : "warning"}`}
+            variant={connected ? "success" : "warning"}
+          >
             {connected ? "Connected" : status?.state === "FAILED" ? "Unavailable" : "Not connected"}
-          </span>
+          </Badge>
         </div>
         <div className="provider-panel-body">
           <p>
@@ -3147,7 +3191,8 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
   }
 
   return (
-    <AppShell active={view} memberCount={members.length + friends.length} setActive={setView}>
+    <TooltipProvider>
+      <AppShell active={view} memberCount={members.length + friends.length} setActive={setView}>
       {boot === "loading" && (
         <div className="loading-bar" aria-label="Loading local vault" role="progressbar" />
       )}
@@ -3189,6 +3234,7 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
       )}
       {view === "allotment" && <AllotmentView bridge={bridge} members={members} />}
       {view === "settings" && <SettingsView bridge={bridge} />}
-    </AppShell>
+      </AppShell>
+    </TooltipProvider>
   );
 }

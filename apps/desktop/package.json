@@ -5,24 +5,37 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "dev:hoplite": "vite --host 0.0.0.0 --port 3000 --strictPort",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@radix-ui/react-progress": "^1.1.0",
+    "@radix-ui/react-separator": "^1.1.0",
+    "@radix-ui/react-slot": "^1.1.0",
+    "@radix-ui/react-tooltip": "^1.1.0",
+    "@react-three/fiber": "^9.7.0",
     "@tauri-apps/api": "2.11.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "tailwind-merge": "^3.0.0",
+    "three": "latest"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
     "@tauri-apps/cli": "2.11.4",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
+    "@types/three": "latest",
     "@vitejs/plugin-react": "6.1.0",
     "jsdom": "30.0.1",
+    "tailwindcss": "^4.2.2",
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vitest": "4.1.11"
