@@ -39,5 +39,5 @@ keyring = { version = "3.6", features = [
   "windows-native",
 ] }
 base64 = "0.22"
-aes = "0.8"
+aes = "0.9"
 cbc = "0.1"
