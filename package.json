@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @sanket/desktop",
+    "dev:hoplite": "npm run dev:hoplite --workspace @sanket/desktop",
     "build": "npm run build --workspace @sanket/desktop",
     "test": "npm run test --workspace @sanket/desktop && python -m unittest discover -s tests -v",
     "typecheck": "npm run typecheck --workspace @sanket/desktop",

@@ -47,6 +47,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Hoplite workspace artifacts
+.hoplite/attachments/
+
 # Logs
 *.log
 npm-debug.log*
