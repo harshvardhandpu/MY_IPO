@@ -31,3 +31,33 @@ fn development_mode_allows_synthetic_app() {
     assert!(!st.real_pan_allowed);
     assert!(st.blocker.is_some());
 }
+
+#[test]
+fn release_build_defaults_to_production_secure() {
+    assert_eq!(
+        sanket_desktop_lib::service::resolve_security_mode_for_build(None, true),
+        RuntimeSecurityMode::ProductionSecure
+    );
+}
+
+#[test]
+fn release_build_rejects_explicit_development_synthetic_mode() {
+    assert_eq!(
+        sanket_desktop_lib::service::resolve_security_mode_for_build(
+            Some("DEVELOPMENT_SYNTHETIC"),
+            true,
+        ),
+        RuntimeSecurityMode::ProductionSecure
+    );
+}
+
+#[test]
+fn debug_build_preserves_explicit_development_synthetic_mode() {
+    assert_eq!(
+        sanket_desktop_lib::service::resolve_security_mode_for_build(
+            Some("DEVELOPMENT_SYNTHETIC"),
+            false,
+        ),
+        RuntimeSecurityMode::DevelopmentSynthetic
+    );
+}

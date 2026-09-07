@@ -1,29 +1,10 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import {
-  type FormEvent,
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { CountUp } from "./components/motion/CountUp";
 import { PageTransition } from "./components/motion/PageTransition";
-import { SceneBoundary } from "./components/motion/SceneBoundary";
 import { Badge } from "./components/ui/badge";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "./components/ui/tooltip";
-import { WeebScene } from "./WeebScene";
-
-const CinematicScene = lazy(() =>
-  import("./scenes/CinematicScene").catch(() => ({ default: () => null })),
-);
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 
 export interface CommandBridge {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -180,6 +161,19 @@ interface HistoricalApplicationResponse {
 
 type View = "dashboard" | "members" | "invest" | "allotment" | "settings";
 type BootState = "loading" | "ready" | "offline";
+
+interface AuthStatus {
+  ready: boolean;
+  authenticated: boolean;
+  accountId?: string | null;
+  role?: string | null;
+}
+
+interface LoginResponse {
+  accepted: boolean;
+}
+
+type AuthMode = "login" | "bootstrap" | "signup";
 
 interface AllotmentCandidate {
   application_id: string;
@@ -592,11 +586,13 @@ function AppShell({
   setActive,
   children,
   memberCount,
+  onLogout,
 }: {
   active: View;
   setActive: (view: View) => void;
   children: React.ReactNode;
   memberCount: number;
+  onLogout: () => void;
 }) {
   const items: Array<{ label: string; view: View; glyph: string }> = [
     { label: "Dashboard", view: "dashboard", glyph: "▦" },
@@ -608,20 +604,12 @@ function AppShell({
 
   return (
     <div className="app-shell">
-      <SceneBoundary fallback={<WeebScene />}>
-        <Suspense fallback={<WeebScene />}>
-          <CinematicScene view={active} />
-        </Suspense>
-      </SceneBoundary>
       <aside className="sidebar">
         <div className="brand-row">
           <Mark />
           <div>
             <strong>Sanket IPO</strong>
             <span>Private investment ledger</span>
-            <span className="brand-kana" aria-hidden="true">
-              サンケット
-            </span>
           </div>
         </div>
         <nav aria-label="Primary navigation">
@@ -682,6 +670,9 @@ function AppShell({
               Private ledger — encrypted local vault with append-only audit history
             </TooltipContent>
           </Tooltip>
+          <button className="text-button" onClick={onLogout} type="button">
+            Sign out
+          </button>
         </header>
         <PageTransition pageKey={active}>{children}</PageTransition>
       </main>
@@ -835,6 +826,256 @@ function SettingsView({ bridge }: { bridge: CommandBridge }) {
         </div>
       </section>
     </div>
+  );
+}
+
+function AuthGate({
+  bridge,
+  status,
+  error: initialError,
+  onAuthenticated,
+}: {
+  bridge: CommandBridge;
+  status: AuthStatus;
+  error?: string;
+  onAuthenticated: () => Promise<AuthStatus | null>;
+}) {
+  const [mode, setMode] = useState<AuthMode>("login");
+  const [login, setLogin] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [email, setEmail] = useState("");
+  const [inviteId, setInviteId] = useState("");
+  const [inviteSecret, setInviteSecret] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(initialError ?? "");
+
+  useEffect(() => {
+    setError(initialError ?? "");
+  }, [initialError]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!status.ready || pending) return;
+    setBusy(true);
+    setError("");
+    let submittedPassword = password;
+    try {
+      if (mode === "login") {
+        const response = await bridge.invoke<LoginResponse>("login", {
+          request: { login: login.trim(), password: submittedPassword },
+        });
+        setPassword("");
+        submittedPassword = "";
+        if (!response.accepted) {
+          setError("The login details could not be verified.");
+          return;
+        }
+        await onAuthenticated();
+      } else if (mode === "bootstrap") {
+        const response = await bridge.invoke<LoginResponse>("bootstrap_owner", {
+          request: {
+            accountId: accountId.trim(),
+            email: email.trim(),
+            password: submittedPassword,
+          },
+        });
+        setPassword("");
+        submittedPassword = "";
+        if (!response.accepted) {
+          setError("The owner account could not be created.");
+          return;
+        }
+        await onAuthenticated();
+      } else {
+        await bridge.invoke("complete_signup", {
+          request: {
+            inviteId: inviteId.trim(),
+            inviteSecret: inviteSecret.trim(),
+            accountId: accountId.trim(),
+            password: submittedPassword,
+          },
+        });
+        setPassword("");
+        submittedPassword = "";
+        setPending(true);
+        setError("");
+        await onAuthenticated();
+      }
+    } catch (cause) {
+      setError(userFacingError(cause, "Authentication could not be completed. Try again."));
+    } finally {
+      submittedPassword = "";
+      setPassword("");
+      setInviteSecret("");
+      setBusy(false);
+    }
+  }
+
+  if (pending) {
+    return (
+      <main className="onboarding-page">
+        <section className="onboarding-intro">
+          <div className="brand-row onboarding-brand">
+            <Mark />
+            <div>
+              <strong>Sanket IPO</strong>
+              <span>Private group OS</span>
+            </div>
+          </div>
+          <p className="eyebrow">Signup submitted</p>
+          <h1>Account approval is pending</h1>
+          <p>
+            Your signup request is pending approval. You can close this window and return later.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="onboarding-page">
+      <section className="onboarding-intro">
+        <div className="brand-row onboarding-brand">
+          <Mark />
+          <div>
+            <strong>Sanket IPO</strong>
+            <span>Private group OS</span>
+          </div>
+        </div>
+        <p className="eyebrow">Private workspace</p>
+        <h1>Sign in to your member vault</h1>
+        <p>
+          Authentication stays in the local Rust service. Protected ledger data loads only after
+          access is granted.
+        </p>
+      </section>
+      <form className="form-panel onboarding-form" onSubmit={submit}>
+        <div className="action-buttons" role="group" aria-label="Authentication mode">
+          <button
+            className={mode === "login" ? "primary-button" : "secondary-button"}
+            onClick={() => setMode("login")}
+            type="button"
+          >
+            Sign in
+          </button>
+          <button
+            className={mode === "bootstrap" ? "primary-button" : "secondary-button"}
+            onClick={() => setMode("bootstrap")}
+            type="button"
+          >
+            First-run owner
+          </button>
+          <button
+            className={mode === "signup" ? "primary-button" : "secondary-button"}
+            onClick={() => setMode("signup")}
+            type="button"
+          >
+            Invite signup
+          </button>
+        </div>
+
+        {!status.ready && !error && (
+          <p className="inline-error" role="alert">
+            Authentication is unavailable. Try again.
+          </p>
+        )}
+
+        {mode === "login" && (
+          <>
+            <label>
+              Email or login
+              <input
+                autoComplete="username"
+                required
+                value={login}
+                onChange={(event) => setLogin(event.target.value)}
+              />
+            </label>
+          </>
+        )}
+
+        {mode === "bootstrap" && (
+          <>
+            <label>
+              Account ID
+              <input
+                required
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+              />
+            </label>
+            <label>
+              Owner email
+              <input
+                autoComplete="email"
+                required
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </label>
+          </>
+        )}
+
+        {mode === "signup" && (
+          <>
+            <label>
+              Invite ID
+              <input
+                required
+                value={inviteId}
+                onChange={(event) => setInviteId(event.target.value)}
+              />
+            </label>
+            <label>
+              Invite secret
+              <input
+                autoComplete="off"
+                required
+                type="password"
+                value={inviteSecret}
+                onChange={(event) => setInviteSecret(event.target.value)}
+              />
+            </label>
+            <label>
+              Account ID
+              <input
+                required
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+              />
+            </label>
+          </>
+        )}
+
+        <label>
+          Password
+          <input
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            required
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        {error && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button className="primary-button" disabled={busy || !status.ready} type="submit">
+          {busy
+            ? "Working…"
+            : mode === "login"
+              ? "Sign in"
+              : mode === "bootstrap"
+                ? "Create owner account"
+                : "Submit signup"}
+        </button>
+      </form>
+    </main>
   );
 }
 
@@ -1088,22 +1329,26 @@ function DashboardView({
   const metrics = [
     {
       label: "Total invested",
-      value: formatRupees(dashboard.total_planned_paise),
+      raw: dashboard.total_planned_paise,
+      format: formatRupees,
       detail: `${dashboard.submitted_session_count} submitted session${dashboard.submitted_session_count === 1 ? "" : "s"}`,
     },
     {
       label: "Realized profit",
-      value: formatRupees(dashboard.profit_paise),
+      raw: dashboard.profit_paise,
+      format: formatRupees,
       detail: "Only recorded allotment outcomes",
     },
     {
       label: "Applications",
-      value: String(activity.length),
+      raw: activity.length,
+      format: (n: number) => String(n),
       detail: "Submitted records available to check",
     },
     {
       label: "Accounts",
-      value: String(dashboard.member_count + dashboard.friend_count),
+      raw: dashboard.member_count + dashboard.friend_count,
+      format: (n: number) => String(n),
       detail: `${dashboard.member_count} core / ${dashboard.friend_count} friend`,
     },
   ];
@@ -1155,7 +1400,9 @@ function DashboardView({
         {metrics.map((metric) => (
           <div className="summary-metric kpi-card" key={metric.label}>
             <span>{metric.label}</span>
-            <strong>{metric.value}</strong>
+            <strong>
+              <CountUp value={metric.raw} format={metric.format} />
+            </strong>
             <small>{metric.detail}</small>
           </div>
         ))}
@@ -3145,37 +3392,80 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
 
 export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
   const [boot, setBoot] = useState<BootState>("loading");
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authError, setAuthError] = useState("");
   const [view, setView] = useState<View>("dashboard");
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [friends, setFriends] = useState<FriendRow[]>([]);
   const [dashboard, setDashboard] = useState<DashboardData>(EMPTY_DASHBOARD);
+
+  const loadProtectedData = useCallback(async () => {
+    const [nextMembers, nextFriends, nextDashboard] = await Promise.all([
+      bridge.invoke<MemberRow[]>("list_members"),
+      bridge.invoke<FriendRow[]>("list_friends"),
+      bridge.invoke<DashboardData>("get_dashboard"),
+    ]);
+    setMembers(nextMembers);
+    setFriends(nextFriends);
+    setDashboard(nextDashboard);
+    setBoot("ready");
+  }, [bridge]);
 
   const loadDashboard = useCallback(async () => {
     const next = await bridge.invoke<DashboardData>("get_dashboard");
     setDashboard(next);
   }, [bridge]);
 
-  useEffect(() => {
-    let active = true;
-    Promise.all([
-      bridge.invoke<MemberRow[]>("list_members"),
-      bridge.invoke<FriendRow[]>("list_friends"),
-      bridge.invoke<DashboardData>("get_dashboard"),
-    ])
-      .then(([nextMembers, nextFriends, nextDashboard]) => {
-        if (!active) return;
-        setMembers(nextMembers);
-        setFriends(nextFriends);
-        setDashboard(nextDashboard);
+  const refreshAuthStatus = useCallback(async (): Promise<AuthStatus | null> => {
+    try {
+      const next = await bridge.invoke<AuthStatus>("get_auth_status");
+      setAuthStatus(next);
+      setAuthError("");
+      if (!next.ready) {
+        setBoot("offline");
+        return next;
+      }
+      if (!next.authenticated) {
+        setMembers([]);
+        setFriends([]);
+        setDashboard(EMPTY_DASHBOARD);
         setBoot("ready");
-      })
-      .catch(() => {
-        if (active) setBoot("offline");
-      });
-    return () => {
-      active = false;
-    };
-  }, [bridge]);
+        return next;
+      }
+      setBoot("loading");
+      await loadProtectedData();
+      return next;
+    } catch (cause) {
+      setAuthStatus({ ready: false, authenticated: false });
+      setAuthError(userFacingError(cause, "Authentication is unavailable. Try again."));
+      setBoot("offline");
+      return null;
+    }
+  }, [bridge, loadProtectedData]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await bridge.invoke("logout");
+      await refreshAuthStatus();
+    } catch (cause) {
+      setAuthError(userFacingError(cause, "Could not sign out. Try again."));
+    }
+  }, [bridge, refreshAuthStatus]);
+
+  useEffect(() => {
+    void refreshAuthStatus();
+  }, [refreshAuthStatus]);
+
+  if (!authStatus || !authStatus.authenticated) {
+    return (
+      <AuthGate
+        bridge={bridge}
+        error={authError}
+        onAuthenticated={refreshAuthStatus}
+        status={authStatus ?? { ready: false, authenticated: false }}
+      />
+    );
+  }
 
   if (boot === "ready" && members.length === 0) {
     return (
@@ -3192,48 +3482,53 @@ export function App({ bridge = defaultBridge }: { bridge?: CommandBridge }) {
 
   return (
     <TooltipProvider>
-      <AppShell active={view} memberCount={members.length + friends.length} setActive={setView}>
-      {boot === "loading" && (
-        <div className="loading-bar" aria-label="Loading local vault" role="progressbar" />
-      )}
-      {view === "dashboard" && (
-        <DashboardView
-          bridge={bridge}
-          dashboard={dashboard}
-          ownerMemberId={members.find((member) => member.role === "OWNER")?.id}
-          onAllotment={() => setView("allotment")}
-          onChanged={loadDashboard}
-          onInvest={() => setView("invest")}
-        />
-      )}
-      {view === "members" && (
-        <MembersView
-          bridge={bridge}
-          friends={friends}
-          members={members}
-          onFriendAdded={(friend) => {
-            setFriends((current) => [...current, friend]);
-            setDashboard((current) => ({ ...current, friend_count: current.friend_count + 1 }));
-          }}
-          onFriendArchived={(id) => {
-            setFriends((current) => current.filter((friend) => friend.id !== id));
-            setDashboard((current) => ({
-              ...current,
-              friend_count: Math.max(0, current.friend_count - 1),
-            }));
-          }}
-        />
-      )}
-      {view === "invest" && (
-        <InvestView
-          bridge={bridge}
-          friends={friends}
-          members={members}
-          onSubmitted={loadDashboard}
-        />
-      )}
-      {view === "allotment" && <AllotmentView bridge={bridge} members={members} />}
-      {view === "settings" && <SettingsView bridge={bridge} />}
+      <AppShell
+        active={view}
+        memberCount={members.length + friends.length}
+        onLogout={() => void handleLogout()}
+        setActive={setView}
+      >
+        {boot === "loading" && (
+          <div className="loading-bar" aria-label="Loading local vault" role="progressbar" />
+        )}
+        {view === "dashboard" && (
+          <DashboardView
+            bridge={bridge}
+            dashboard={dashboard}
+            ownerMemberId={members.find((member) => member.role === "OWNER")?.id}
+            onAllotment={() => setView("allotment")}
+            onChanged={loadDashboard}
+            onInvest={() => setView("invest")}
+          />
+        )}
+        {view === "members" && (
+          <MembersView
+            bridge={bridge}
+            friends={friends}
+            members={members}
+            onFriendAdded={(friend) => {
+              setFriends((current) => [...current, friend]);
+              setDashboard((current) => ({ ...current, friend_count: current.friend_count + 1 }));
+            }}
+            onFriendArchived={(id) => {
+              setFriends((current) => current.filter((friend) => friend.id !== id));
+              setDashboard((current) => ({
+                ...current,
+                friend_count: Math.max(0, current.friend_count - 1),
+              }));
+            }}
+          />
+        )}
+        {view === "invest" && (
+          <InvestView
+            bridge={bridge}
+            friends={friends}
+            members={members}
+            onSubmitted={loadDashboard}
+          />
+        )}
+        {view === "allotment" && <AllotmentView bridge={bridge} members={members} />}
+        {view === "settings" && <SettingsView bridge={bridge} />}
       </AppShell>
     </TooltipProvider>
   );

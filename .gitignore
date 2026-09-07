@@ -16,6 +16,7 @@ __pycache__/
 # Tauri bundles and generated state
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/target/
+apps/desktop/dist-stale/
 
 # Local application data (never commit)
 .local/

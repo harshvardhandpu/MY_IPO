@@ -1,0 +1,25 @@
+{
+  "gate": "SANKET-R2",
+  "release_phase": "R2_FUNCTIONAL_DATA_INTEGRITY",
+  "authority_role": "ASTRA_HIGH",
+  "authority_model": "gpt-6-astra",
+  "authority_provider": "openai-codex",
+  "invoked_at": "2026-09-07T14:06:30+05:30",
+  "session_id": "20260907_140630_52eb62",
+  "decision": "APPROVED",
+  "blockers": [],
+  "evidence_artifact": "reports/release-readiness/r2-functional-data-integrity-evidence.md",
+  "evidence_sha256": "249ae2d4439f576034289a3109221891667f1d6c7fd9822358f60d0d49fbfc33",
+  "protected_head": "d3864557ee56282214733d44149cb2ed1fbc0ee6",
+  "rationale": "The supplied evidence is sufficient to close SANKET-R2 Functional + Data Integrity and activate its R3/R4 successors: focused tests and full local gates PASS, covering event-authoritative replay/idempotency, VOIDED and duplicate semantics, durable recovery, domain invariants, desktop flows, provider contracts/provenance, and fail-closed persistence/security boundaries. The intentionally dirty worktree and unrun live MUFG precheck are not blockers to this local acceptance scope. This decision relies on the reported evidence, without independent artifact verification, and grants no Linux/Windows package approval, cross-platform acceptance, clean-profile acceptance, or final RELEASE READY status.",
+  "sensitive_operations": {
+    "pan_accessed": false,
+    "credential_value_accessed": false,
+    "keyring_value_accessed": false,
+    "live_business_provider_request": false,
+    "live_mufg_request": false,
+    "financial_mutation": false,
+    "commit_created": false,
+    "push_performed": false
+  }
+}

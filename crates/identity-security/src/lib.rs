@@ -8,6 +8,7 @@
 
 mod key_provider;
 mod pan;
+mod password;
 mod redacted;
 mod secret;
 
@@ -19,6 +20,11 @@ pub use key_provider::{
     OsKeyringKeyProvider, RuntimeSecurityMode, assert_mode_allows_provider,
 };
 pub use pan::{MaskedPan, Pan, PanError};
+pub use password::{
+    ARGON2_LANES, ARGON2_MEMORY_KIB, ARGON2_TIME_COST, ARGON2_VERSION, PASSWORD_VERIFIER_VERSION,
+    Password, PasswordCredentialError, PasswordVerification, PasswordVerifier, hash_password,
+    verify_password,
+};
 pub use redacted::Redacted;
 pub use secret::{IdentitySecret, IdentitySecretError};
 

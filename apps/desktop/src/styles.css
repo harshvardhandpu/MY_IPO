@@ -645,6 +645,25 @@ code {
   overflow: hidden;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .panel,
+  .kpi-card {
+    transition:
+      box-shadow 180ms ease,
+      transform 180ms ease,
+      border-color 180ms ease;
+  }
+
+  .panel:hover,
+  .kpi-card:hover {
+    border-color: var(--border-strong);
+    box-shadow:
+      var(--shadow-panel),
+      0 4px 16px rgb(35 55 42 / 0.06);
+    transform: translateY(-1px);
+  }
+}
+
 .panel-heading {
   min-height: 56px;
   display: flex;
@@ -1694,6 +1713,29 @@ legend {
   }
   to {
     background-position: 250% 0;
+  }
+}
+
+/* Page-level enter transition: a short, restrained fade/rise on navigation.
+   Kept subtle by design — this is a calm operations workspace, not a scene. */
+.page-motion {
+  min-height: 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-motion {
+    animation: page-enter 220ms ease-out;
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

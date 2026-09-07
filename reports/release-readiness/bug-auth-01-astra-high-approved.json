@@ -1,0 +1,26 @@
+{
+  "gate": "BUG-AUTH-01",
+  "release_phase": "R1_SECURITY_CLOSURE",
+  "authority_role": "ASTRA_HIGH",
+  "authority_model": "gpt-6-astra",
+  "authority_provider": "openai-codex",
+  "invoked_at": "2026-09-07T13:51:17+05:30",
+  "session_id": "20260907_135117_129165",
+  "prior_decision": "REVISE",
+  "prior_decision_artifact": "reports/release-readiness/bug-auth-01-astra-high-decision.json",
+  "remediation_artifact": "reports/release-readiness/bug-auth-01-security-evidence-remediation.md",
+  "protected_head": "d3864557ee56282214733d44149cb2ed1fbc0ee6",
+  "decision": "APPROVED",
+  "blockers": [],
+  "rationale": "Accepted on the supplied remediation evidence: event/vault-authoritative reconstruction without projection authority; invite, approval, revocation, login, and session enforcement; native-only session ownership and fail-closed authenticated actor checks; secret redaction and serialization boundaries; and passing focused and workspace-wide gates. The evidence-only remediation supports implementation acceptance under SEC-AUTH-01 APPROVE_MINIMAL_DESIGN without requiring further production changes. This decision relies on the supplied evidence, not independent artifact or hash verification, and does not approve Linux/Windows packaging, final release, commit, or push.",
+  "sensitive_operations": {
+    "pan_accessed": false,
+    "credential_value_accessed": false,
+    "keyring_value_accessed": false,
+    "live_provider_request": false,
+    "live_mufg_request": false,
+    "financial_mutation": false,
+    "commit_created": false,
+    "push_performed": false
+  }
+}

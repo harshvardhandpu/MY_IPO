@@ -1,0 +1,29 @@
+{
+  "gate": "BUG-AUTH-01",
+  "release_phase": "R1_SECURITY_CLOSURE",
+  "authority_role": "ASTRA_HIGH",
+  "authority_model": "gpt-6-astra",
+  "authority_provider": "openai-codex",
+  "invoked_at": "2026-09-07T13:45:26+05:30",
+  "session_id": "20260907_134526_6e85f6",
+  "health_probe_session_id": "20260907_134358_98e3d9",
+  "protected_head": "d3864557ee56282214733d44149cb2ed1fbc0ee6",
+  "decision": "REVISE",
+  "blockers": [
+    "Provide source-level findings and named test assertions tied to the supplied artifact hashes proving event/vault authority, rejection of SQLite-only authorization changes, Argon2id credential handling, invite-only signup, authorized approval/revocation, and generic failed-login behavior.",
+    "Provide a complete protected Tauri-command inventory and enforcement trace, with focused tests proving native session ownership, logout invalidation, fail-closed recovery, and rejection of absent, invalid, or revoked sessions without bypasses or reaching sensitive operations.",
+    "Provide focused serialization, logging, persistence, and frontend-boundary evidence proving passwords, invites, and session secrets are not exposed or retained outside their intended handling boundary, including native session tokens being absent from JavaScript responses."
+  ],
+  "rationale": "The supplied passing gates and artifact hashes support build hygiene and artifact identification, but test counts and suite names do not establish the required security assertions or enforcement coverage. No implementation defect is established; the acceptance evidence is insufficient. SEC-AUTH-01 APPROVE_MINIMAL_DESIGN remains accepted, while BUG-AUTH-01 must remain REVIEW and fail-closed pending these focused proofs. No repository inspection or independent execution was performed in this review; only the verification skill was loaded. No files were edited, sensitive operations invoked, or commit/push performed. This decision does not grant packaging or release approval.",
+  "remediation_artifact": "reports/release-readiness/bug-auth-01-security-evidence-remediation.md",
+  "sensitive_operations": {
+    "pan_accessed": false,
+    "credential_value_accessed": false,
+    "keyring_value_accessed": false,
+    "live_provider_request": false,
+    "live_mufg_request": false,
+    "financial_mutation": false,
+    "commit_created": false,
+    "push_performed": false
+  }
+}

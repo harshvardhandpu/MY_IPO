@@ -860,6 +860,13 @@ impl LocalIndex {
             sanket_domain::EventPayload::InvestmentRecommendationApplied { .. }
             | sanket_domain::EventPayload::DeviceRegistered { .. }
             | sanket_domain::EventPayload::SettingsInitialized { .. }
+            | sanket_domain::EventPayload::OwnerBootstrapped { .. }
+            | sanket_domain::EventPayload::InviteIssued { .. }
+            | sanket_domain::EventPayload::SignupPending { .. }
+            | sanket_domain::EventPayload::AccountApproved { .. }
+            | sanket_domain::EventPayload::AccountRevoked { .. }
+            | sanket_domain::EventPayload::SessionStarted { .. }
+            | sanket_domain::EventPayload::SessionLoggedOut { .. }
             | sanket_domain::EventPayload::SensitiveIdentityAccessed { .. }
             | sanket_domain::EventPayload::LookupAuthorizationGranted { .. }
             | sanket_domain::EventPayload::LookupAuthorizationConsumed { .. } => {
@@ -1365,6 +1372,7 @@ impl LocalIndex {
 fn role_to_str(role: sanket_domain::Role) -> &'static str {
     match role {
         sanket_domain::Role::Owner => "OWNER",
+        sanket_domain::Role::Admin => "ADMIN",
         sanket_domain::Role::CoreMember => "CORE_MEMBER",
     }
 }

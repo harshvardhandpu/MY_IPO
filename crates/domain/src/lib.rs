@@ -23,12 +23,13 @@ fn default_application_source() -> String {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Role {
     Owner,
+    Admin,
     CoreMember,
 }
 
 impl Role {
     pub const fn can_manage_members(self) -> bool {
-        matches!(self, Self::Owner)
+        matches!(self, Self::Owner | Self::Admin)
     }
 }
 
@@ -51,6 +52,51 @@ pub enum EventPayload {
     },
     SettingsInitialized {
         settings_version: u16,
+    },
+    /// Authentication verifier metadata for the first local owner account.
+    /// The verifier is a salted password hash, never a plaintext password.
+    OwnerBootstrapped {
+        account_id: String,
+        email: String,
+        verifier_version: u16,
+        verifier: String,
+    },
+    /// A one-time invite is issued. Only the digest is authoritative/persisted.
+    InviteIssued {
+        invite_id: String,
+        account_id: String,
+        email: String,
+        invite_digest: String,
+        expires_at: String,
+    },
+    /// A signup submitted a verifier for an invited account; the account remains pending.
+    SignupPending {
+        account_id: String,
+        invite_id: String,
+        email: String,
+        verifier_version: u16,
+        verifier: String,
+    },
+    /// An owner/admin approved a pending account.
+    AccountApproved {
+        account_id: String,
+        approved_by: String,
+    },
+    /// An owner/admin revoked an account.
+    AccountRevoked {
+        account_id: String,
+        revoked_by: String,
+    },
+    /// A session was authenticated; only a digest of the ephemeral token is persisted.
+    SessionStarted {
+        session_hash: String,
+        account_id: String,
+        expires_at: String,
+    },
+    /// A session was logged out; only a digest of the ephemeral token is persisted.
+    SessionLoggedOut {
+        session_hash: String,
+        account_id: String,
     },
     SensitiveIdentityAccessed {
         account_id: String,
@@ -231,6 +277,13 @@ impl EventPayload {
         match self {
             Self::DeviceRegistered { .. } => "DEVICE_REGISTERED",
             Self::SettingsInitialized { .. } => "SETTINGS_INITIALIZED",
+            Self::OwnerBootstrapped { .. } => "OWNER_BOOTSTRAPPED",
+            Self::InviteIssued { .. } => "INVITE_ISSUED",
+            Self::SignupPending { .. } => "SIGNUP_PENDING",
+            Self::AccountApproved { .. } => "ACCOUNT_APPROVED",
+            Self::AccountRevoked { .. } => "ACCOUNT_REVOKED",
+            Self::SessionStarted { .. } => "SESSION_STARTED",
+            Self::SessionLoggedOut { .. } => "SESSION_LOGGED_OUT",
             Self::SensitiveIdentityAccessed { .. } => "SENSITIVE_IDENTITY_ACCESSED",
             Self::LookupAuthorizationGranted { .. } => "LOOKUP_AUTHORIZATION_GRANTED",
             Self::LookupAuthorizationConsumed { .. } => "LOOKUP_AUTHORIZATION_CONSUMED",

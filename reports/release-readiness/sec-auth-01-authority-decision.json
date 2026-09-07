@@ -1,0 +1,76 @@
+{
+  "decision": "APPROVE_MINIMAL_DESIGN",
+  "authority_role": "SECURITY_AUTHORITY",
+  "authority_model": "gpt-5.6-luna",
+  "authority_provider": "openai-codex",
+  "backend_required": false,
+  "backend_ruling": "No central backend is required; append-only vault events remain authoritative, OS keyring protects device secrets, and SQLite remains a rebuildable local projection.",
+  "approved_v1_design": {
+    "identity_and_signup": "Bootstrap exactly one owner only when the vault-backed installation root is genuinely uninitialized; all later account creation requires a one-time owner-issued invite recorded in the append-only vault, creates a pending account, and requires owner/admin approval before login.",
+    "credential_storage": "Add a vetted Argon2id/password-hash dependency because no direct password-hardening primitive was found; store only salted, versioned verifier metadata in an authenticated vault record, keep refresh or unlock secrets only in the existing OS keyring, zeroize transient passwords, and never store plaintext credentials in SQLite, config, events, logs, or telemetry.",
+    "login": "Verify credentials in Rust through a narrow Tauri command, return only generic authentication outcomes, establish an in-memory AppState session only for an approved account, and require server-side session validation for every protected command rather than trusting caller-supplied actor identifiers.",
+    "session_persistence_recovery": "When explicitly enabled, persist only an opaque, device-bound, expiring refresh or unlock secret in the OS keyring; never persist it in SQLite or config; restart must revalidate vault authorization and token state, otherwise require the password, with recovery limited to valid credentials or an owner-approved one-time recovery event.",
+    "logout": "Clear the native session, invalidate or rotate any refresh secret, zeroize transient credential material, return the UI to the locked state, and reject all commands using the former session.",
+    "failed_login": "Use the same safe response for unknown, pending, revoked, and wrong-password cases; apply bounded exponential backoff and rate limiting, avoid user enumeration, record only non-sensitive audit metadata, and fail closed on lockout or state errors.",
+    "authorization_and_approval": "Derive owner/admin role, invite validity, approval, revocation, expiry, and one-time consumption exclusively from append-only vault events; reject pending or revoked accounts and never treat UI state, request actor fields, SQLite rows, environment variables, or config as authority.",
+    "sqlite_role": "Use SQLite only as a query and UI projection; authenticate against vault authority, rebuild or invalidate stale or tampered projections, and ensure direct SQLite edits cannot create approved identities, sessions, roles, invites, or recovery paths.",
+    "linux_windows_strategy": "Reuse the existing keyring dependency and declared Linux Secret Service and Windows Credential Manager backends; unavailable, locked, mock, or unverified stores must fail closed, while app-private vault paths require platform-appropriate permission hardening and clean-profile, restart, and secure-mode verification on both platforms."
+  },
+  "implementation_scope": [
+    "Add bounded authentication event and record types for owner bootstrap, invited signup, approval, revocation, password-verifier metadata, invite consumption, session lifecycle, and recovery; keep vault events authoritative.",
+    "Add one vetted Argon2id/password-hash dependency with pinned parameters and no custom password cryptography.",
+    "Implement native Rust authentication and session state in AppState and require validated sessions at protected Tauri command and service boundaries.",
+    "Replace first-run detection based on member or SQLite counts with vault-backed initialization checks that cannot be reset by deleting or editing the projection.",
+    "Implement one-time, expiring, account-bound invites and owner/admin approval before account activation.",
+    "Add login, invite/signup, approval, logout, lock, and recovery UI flows while ensuring passwords and refresh secrets do not remain in React state after command completion.",
+    "Add OS-keyring-backed optional device session persistence and fail-closed behavior for unavailable or mock backends on Linux and Windows.",
+    "Add Windows vault and application-data ACL hardening without changing PAN, provider, keyring, or allotment trust boundaries."
+  ],
+  "security_invariants": [
+    "No plaintext password is persisted, serialized, logged, displayed, or included in telemetry.",
+    "Only approved, non-revoked, invite-authorized accounts can establish sessions.",
+    "SQLite and configuration edits cannot grant authentication, authorization, approval, recovery, or session validity.",
+    "The append-only vault event source is authoritative and projections are disposable and rebuildable.",
+    "Logout, expiry, revocation, failed integrity checks, and unavailable keyring state fail closed.",
+    "Unknown, pending, revoked, and wrong-password cases do not reveal account existence or approval state.",
+    "Invite and recovery artifacts are random, scoped, expiring, single-use, and never stored as plaintext reusable credentials.",
+    "All protected operations validate native session state and authorization independently of UI-provided actor identifiers.",
+    "Existing PAN encryption, OS-keyring production gate, sensitive-identity audit, provider credential boundary, and allotment authorization gates remain unchanged.",
+    "No mandatory cloud database or provider request is introduced for local authentication."
+  ],
+  "required_tests": [
+    "Owner bootstrap succeeds only for an empty authenticated installation root and cannot be repeated after SQLite deletion, SQLite replacement, or config edits.",
+    "Signup rejects missing, expired, reused, mismatched, and revoked invites; pending accounts cannot log in; approved accounts can log in.",
+    "Password verification covers correct, incorrect, malformed, and changed credentials with generic errors and bounded backoff.",
+    "Serialized vault, SQLite, config, UI state, debug output, errors, and logs contain no plaintext password, invite secret, refresh secret, PAN, UPI, or provider credential.",
+    "Forged actor identifiers, altered roles, pending rows, and manually inserted SQLite authorization rows cannot invoke protected commands.",
+    "Logout invalidates the prior session and refresh artifact; expired, revoked, stale, and tampered session artifacts are rejected after restart.",
+    "Projection deletion and rebuild from valid vault events preserve authorization state; invalid or tampered vault authentication records fail closed.",
+    "Owner/admin approval and revocation are append-only, auditable, idempotent, and cannot be bypassed by projection changes.",
+    "Linux Secret Service and Windows Credential Manager secure-mode tests cover persistence, restart, locked or unavailable stores, mock backends, and fail-closed behavior.",
+    "Existing PAN, keyring, credential-redaction, AI-boundary, provider, allotment, and local-first regression tests remain passing without live provider or MUFG requests."
+  ],
+  "prohibited_changes": [
+    "Do not introduce Supabase, a mandatory cloud database, or a central authentication service for v1.",
+    "Do not make SQLite, settings files, environment variables, UI state, or caller-provided actor identifiers authoritative for authentication.",
+    "Do not store plaintext passwords, invite codes, refresh tokens, PAN, UPI, provider tokens, or key material in Git, events, SQLite, config, logs, or telemetry.",
+    "Do not implement custom password hashing, reversible password storage, plaintext comparison, or ad hoc cryptographic primitives.",
+    "Do not add a reset, recovery, or first-run path that bypasses the existing owner, invite, approval, vault, or OS-keyring boundaries.",
+    "Do not weaken development-versus-production security mode checks or permit synthetic key providers for real sensitive identity operations.",
+    "Do not alter PAN, sensitive identity, provider credential, allotment authorization, AI isolation, or append-only authority boundaries.",
+    "Do not perform live provider, MUFG, PAN, credential, keyring-value, or secret access during implementation or testing."
+  ],
+  "evidence_gaps": [
+    "App.tsx currently exposes first-run owner onboarding but no login, invite signup, approval, logout, session recovery, or failed-login flow.",
+    "lib.rs registers onboarding and data commands but no authentication or session commands.",
+    "OnboardMemberRequest has no credential, invite, approval, or session fields, and the current role is supplied by the caller.",
+    "The service accepts caller-provided actor_member_id values and has no authenticated session context guarding protected operations.",
+    "No direct password KDF or password-verifier dependency was found in the manifests; existing hkdf and hmac entries are transitive and are not password-hardening evidence.",
+    "EventPayload and MemberVault contain no authentication, invite, approval, password-verifier, session, logout, or recovery authority records.",
+    "App startup decides whether to render onboarding from list_members projection state, so current first-run behavior is not resistant to SQLite or projection manipulation.",
+    "MemberVault event loading verifies individual content hashes but the inspected implementation does not establish a complete authentication-event chain or uniqueness policy.",
+    "Repository evidence does not verify packaged Linux or Windows authentication, keyring, ACL, restart, recovery, installer, or clean-profile behavior.",
+    "Existing release-readiness evidence explicitly records SEC-AUTH-01 as unclosed and the current application as lacking a verified local authentication flow; this approval is design authority only, not implementation or release approval."
+  ],
+  "rationale": "The repository already provides the required local-first foundation: append-only vault events, SQLite projection state, authenticated identity encryption, OS-keyring abstractions, and Linux/Windows backend declarations. The mandatory capabilities can therefore be met by a bounded native authentication repair without a backend expansion. The current implementation is not release-ready because authentication is absent; BUG-AUTH-01 must implement this design and satisfy the required tests before SEC-AUTH-01 can be closed."
+}

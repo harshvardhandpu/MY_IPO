@@ -2,26 +2,47 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App, type CommandBridge } from "./App";
 
-describe("desktop shell", () => {
-  it("exposes the two primary dashboard actions", () => {
-    render(<App />);
+const shellBridge: CommandBridge = {
+  invoke: vi.fn(async (command: string) => {
+    if (command === "get_auth_status") return { ready: true, authenticated: true };
+    if (command === "list_members") {
+      return [{ id: "member-1", name: "Owner", role: "OWNER", masked_pan: "ABCDE****F" }];
+    }
+    if (command === "list_friends") return [];
+    if (command === "list_allotment_candidates") return [];
+    if (command === "get_dashboard") {
+      return {
+        total_planned_paise: 0,
+        submitted_session_count: 0,
+        member_count: 1,
+        friend_count: 0,
+        profit_paise: 0,
+      };
+    }
+    throw new Error(`Unhandled command: ${command}`);
+  }) as CommandBridge["invoke"],
+};
 
-    const actions = screen.getByLabelText("Quick actions");
+describe("desktop shell", () => {
+  it("exposes the two primary dashboard actions", async () => {
+    render(<App bridge={shellBridge} />);
+
+    const actions = await screen.findByLabelText("Quick actions");
     expect(within(actions).getByRole("button", { name: "Invest" })).toBeVisible();
     expect(within(actions).getByRole("button", { name: "Check Allotment" })).toBeVisible();
   });
 
-  it("shows local-first sync status without requiring a network call", () => {
-    render(<App />);
+  it("shows local-first sync status without requiring a network call", async () => {
+    render(<App bridge={shellBridge} />);
 
-    expect(screen.getByText("Saved locally")).toBeVisible();
+    expect(await screen.findByText("Saved locally")).toBeVisible();
     expect(screen.getByText("Pending sync")).toBeVisible();
   });
 
-  it("renders only implemented navigation destinations and marks the active page", () => {
-    render(<App />);
+  it("renders only implemented navigation destinations and marks the active page", async () => {
+    render(<App bridge={shellBridge} />);
 
-    const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
+    const navigation = await screen.findByRole("navigation", { name: "Primary navigation" });
     expect(navigation).toHaveTextContent("Dashboard");
     expect(navigation).toHaveTextContent("Members");
     expect(navigation).toHaveTextContent("Investments");
@@ -36,6 +57,7 @@ describe("desktop shell", () => {
 
   it("renders dashboard activity from the existing safe candidate DTO", async () => {
     const invoke = vi.fn(async (command: string) => {
+      if (command === "get_auth_status") return { ready: true, authenticated: true };
       if (command === "list_allotment_candidates") {
         return [
           {

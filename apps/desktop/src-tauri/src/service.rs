@@ -16,6 +16,8 @@ use sanket_identity_security::{
     IdentityKey, InMemoryKeyProvider, OsKeyringKeyProvider, Pan, RuntimeSecurityMode,
     assert_mode_allows_provider,
 };
+#[cfg(test)]
+use sanket_identity_security::{KeyProvider, KeyProviderClass, KeyProviderError};
 use sanket_intelligence_vault::{InvestmentDecisionRequest, PlannedIpo};
 use sanket_local_index::LocalIndex;
 use sanket_member_vault::MemberVault;
@@ -143,6 +145,8 @@ pub struct Application {
     vault: MemberVault,
     index: LocalIndex,
     security_mode: RuntimeSecurityMode,
+    #[cfg(test)]
+    test_key_provider: Option<Box<dyn KeyProvider>>,
 }
 
 /// A stable per-device development key derived from the device id (NOT a
@@ -154,10 +158,31 @@ fn dev_key(device_id: &str) -> IdentityKey {
     IdentityKey::from_bytes(&bytes)
 }
 
-fn resolve_security_mode() -> RuntimeSecurityMode {
-    std::env::var("SANKET_SECURITY_MODE")
-        .map(|s| RuntimeSecurityMode::parse(&s))
-        .unwrap_or(RuntimeSecurityMode::DevelopmentSynthetic)
+pub fn resolve_security_mode_for_build(
+    configured: Option<&str>,
+    release_build: bool,
+) -> RuntimeSecurityMode {
+    let mode = configured
+        .map(RuntimeSecurityMode::parse)
+        .unwrap_or_else(|| {
+            if release_build {
+                RuntimeSecurityMode::ProductionSecure
+            } else {
+                RuntimeSecurityMode::DevelopmentSynthetic
+            }
+        });
+    if release_build && mode == RuntimeSecurityMode::DevelopmentSynthetic {
+        RuntimeSecurityMode::ProductionSecure
+    } else {
+        mode
+    }
+}
+
+pub(crate) fn resolve_security_mode() -> RuntimeSecurityMode {
+    resolve_security_mode_for_build(
+        std::env::var("SANKET_SECURITY_MODE").ok().as_deref(),
+        !cfg!(debug_assertions),
+    )
 }
 
 /// Reject a format-valid PAN before free-form text can be persisted into an
@@ -293,6 +318,8 @@ impl Application {
             vault,
             index,
             security_mode,
+            #[cfg(test)]
+            test_key_provider: None,
         })
     }
 
@@ -304,6 +331,14 @@ impl Application {
         match self.security_mode {
             RuntimeSecurityMode::DevelopmentSynthetic => Ok(dev_key(&self.device_id)),
             RuntimeSecurityMode::ProductionSecure => {
+                #[cfg(test)]
+                if let Some(provider) = &self.test_key_provider {
+                    assert_mode_allows_provider(self.security_mode, provider.as_ref())
+                        .map_err(|e| ServiceError::KeyProvider(e.to_string()))?;
+                    return provider
+                        .key(PRODUCTION_KEY_ID)
+                        .map_err(|e| ServiceError::KeyProvider(e.to_string()));
+                }
                 let os = OsKeyringKeyProvider::new();
                 assert_mode_allows_provider(self.security_mode, &os)
                     .map_err(|e| ServiceError::KeyProvider(e.to_string()))?;
@@ -2373,6 +2408,7 @@ fn identity_payload_to_json(identity_payload: &sanket_identity_security::Identit
 
 fn role_from_str(s: &str) -> Role {
     match s.to_uppercase().as_str() {
+        "ADMIN" => Role::Admin,
         "CORE_MEMBER" => Role::CoreMember,
         _ => Role::Owner,
     }
@@ -2691,6 +2727,30 @@ pub struct LookupAuthorizationStatusDto {
 mod lookup_authorization_tests {
     use super::*;
 
+    struct UnavailableKeyProvider;
+
+    impl KeyProvider for UnavailableKeyProvider {
+        fn provider_id(&self) -> &'static str {
+            "os-keyring-test-unavailable"
+        }
+
+        fn provider_class(&self) -> KeyProviderClass {
+            KeyProviderClass::OsSecure
+        }
+
+        fn key(&self, _key_id: &str) -> std::result::Result<IdentityKey, KeyProviderError> {
+            Err(KeyProviderError::NoDurableBackend)
+        }
+
+        fn store_key(
+            &self,
+            _key_id: &str,
+            _key: &IdentityKey,
+        ) -> std::result::Result<(), KeyProviderError> {
+            Err(KeyProviderError::NoDurableBackend)
+        }
+    }
+
     fn test_app(mode: RuntimeSecurityMode) -> (Application, PathBuf) {
         let root =
             std::env::temp_dir().join(format!("sanket-lookup-auth-{}", uuid::Uuid::now_v7()));
@@ -2738,7 +2798,8 @@ mod lookup_authorization_tests {
 
     #[test]
     fn production_without_keyring_denies_lookup_authorization() {
-        let (app, root) = test_app(RuntimeSecurityMode::ProductionSecure);
+        let (mut app, root) = test_app(RuntimeSecurityMode::ProductionSecure);
+        app.test_key_provider = Some(Box::new(UnavailableKeyProvider));
         let security = app.security_status().expect("security status");
         assert!(!security.real_pan_allowed);
         let error = app

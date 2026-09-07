@@ -1,0 +1,28 @@
+{
+  "gate": "SANKET-R3",
+  "release_phase": "R3_LINUX_RELEASE_READINESS",
+  "authority_role": "ASTRA_HIGH",
+  "authority_model": "gpt-6-astra",
+  "authority_provider": "openai-codex",
+  "invoked_at": "2026-09-07T15:43:28+05:30",
+  "recorded_at": "2026-09-07T15:47:06+05:30",
+  "decision": "APPROVED",
+  "blockers": [],
+  "required_remediation": "",
+  "evidence_verified": [
+    "Source snapshot identifier f6554fc7c7228e8f27a26f16a8a75956732acfdf64275ca0406b6daf07c3f87 matches both persisted R3 artifacts; current source state matches all recorded post-build identifiers and pre/post identifiers are unchanged.",
+    "Exactly one build invocation is recorded: npm run tauri:build -- --bundles deb --ci --no-sign.",
+    "Final DEB SHA-256 is 3cb2130d55db9796f55a4a0c75865af333de13dfb1ce8f9401b3e733ca405b47 and size is 6551632 bytes.",
+    "Extracted final packaged payload /usr/bin/sanket-ipo SHA-256 is a6d80bd8b954ef4e9fca1b7e826592b6552fcf08fd5419d06bb10b09f9aeb4b0 and size is 20236048 bytes.",
+    "The packaged payload and unbundled target share ELF Build ID e88d0ca4da198ff620c454f006d854722741f153 and size; exact byte comparison shows the Tauri bundle transformation is the single three-byte UNK-to-DEB substitution, with the DEB payload treated as authoritative.",
+    "DEB metadata verifies package sanket-ipo version 0.1.0 for amd64 with dependencies libwebkit2gtk-4.1-0 and libgtk-3-0; control archive contains only control and md5sums, with no maintainer scripts.",
+    "Persisted evidence records successful disposable-root extraction, install/uninstall checks, clean-profile startup and initialization, restart persistence, and protected user-data behavior.",
+    "Release mode evidence and source resolver verify unset SANKET_SECURITY_MODE selects PRODUCTION_SECURE and synthetic mode is rejected for release builds.",
+    "Evidence explicitly makes no Windows, cross-platform, R5, or SANKET-FINAL claims; no provider, financial mutation, commit, or push occurred."
+  ],
+  "source_snapshot_id": "f6554fc7c7228e8f27a26f16a8a75956732acfdf64275ca0406b6daf07c3f87",
+  "provenance_artifact": "reports/release-readiness/r3-linux-release-provenance.json",
+  "evidence_artifact": "reports/release-readiness/r3-linux-release-evidence.md",
+  "no_commit": true,
+  "no_push": true
+}

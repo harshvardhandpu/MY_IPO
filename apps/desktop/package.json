@@ -16,14 +16,12 @@
     "@radix-ui/react-separator": "^1.1.0",
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-tooltip": "^1.1.0",
-    "@react-three/fiber": "^9.7.0",
     "@tauri-apps/api": "2.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "tailwind-merge": "^3.0.0",
-    "three": "latest"
+    "tailwind-merge": "^3.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
@@ -32,7 +30,6 @@
     "@testing-library/react": "16.3.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
-    "@types/three": "latest",
     "@vitejs/plugin-react": "6.1.0",
     "jsdom": "30.0.1",
     "tailwindcss": "^4.2.2",

@@ -1,13 +1,21 @@
+pub mod auth;
 pub mod provider_credentials;
 pub mod service;
 pub mod upstox;
 pub mod worker;
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::Manager;
+use zeroize::{Zeroize, Zeroizing};
 
+use auth::{
+    AccountDecisionRequest, AuthService, InviteIssueRequest, IssuedInvite, LoginRequest,
+    LoginResponse, OwnerBootstrapRequest, SignupRequest,
+};
 use provider_credentials::{
     ConnectUpstoxAnalyticsTokenRequest, OsProviderCredentialStore, ProviderConnectionStatusDto,
     SecretValue, disconnect, status, store_token,
@@ -22,6 +30,19 @@ use service::{
 };
 use upstox::{IpoCatalogItemDto, IpoCatalogueDto, IpoListQuery};
 
+const AUTHENTICATION_ERROR: &str = "authentication failed";
+
+fn security_status_label(mode: sanket_identity_security::RuntimeSecurityMode) -> &'static str {
+    match mode {
+        sanket_identity_security::RuntimeSecurityMode::ProductionSecure => {
+            "OS KEYRING (PRODUCTION_SECURE)"
+        }
+        sanket_identity_security::RuntimeSecurityMode::DevelopmentSynthetic => {
+            "DEV SYNTHETIC / IN-MEMORY — OS KEYRING REQUIRED BEFORE REAL PAN"
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     app_version: &'static str,
@@ -32,6 +53,8 @@ pub struct AppState {
     worker: Option<worker::AllotmentWorkerHandle>,
     provider_credentials: OsProviderCredentialStore,
     pub(crate) upstox: upstox::UpstoxService,
+    auth_service: Option<Arc<AuthService>>,
+    active_session_token: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -60,6 +83,13 @@ impl AppState {
         vault_root: PathBuf,
         index_path: PathBuf,
     ) -> Self {
+        let auth_service = if vault_root.as_os_str().is_empty() {
+            None
+        } else {
+            sanket_member_vault::MemberVault::open(&vault_root)
+                .ok()
+                .map(|vault| Arc::new(AuthService::new(vault, device_id.clone())))
+        };
         Self {
             app_version: env!("CARGO_PKG_VERSION"),
             device_id,
@@ -69,6 +99,8 @@ impl AppState {
             worker: None,
             provider_credentials: OsProviderCredentialStore,
             upstox: upstox::UpstoxService::new(PathBuf::new()),
+            auth_service,
+            active_session_token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -97,16 +129,247 @@ impl AppState {
             device_id: self.device_id.clone(),
             projection_schema_version: self.projection_schema_version,
             sync_status: sanket_domain::SyncStatus::Pending,
-            os_keyring_status: if std::env::var("SANKET_SECURITY_MODE")
-                .map(|s| s.to_ascii_uppercase().contains("PRODUCTION"))
-                .unwrap_or(false)
-            {
-                "OS KEYRING (PRODUCTION_SECURE)"
-            } else {
-                "DEV SYNTHETIC / IN-MEMORY — OS KEYRING REQUIRED BEFORE REAL PAN"
-            },
+            os_keyring_status: security_status_label(service::resolve_security_mode()),
         }
     }
+
+    fn auth_service(&self) -> Result<&Arc<AuthService>, String> {
+        self.auth_service
+            .as_ref()
+            .ok_or_else(|| AUTHENTICATION_ERROR.into())
+    }
+
+    fn set_active_session(&self, token: Option<String>) -> Result<(), String> {
+        let mut active = self
+            .active_session_token
+            .lock()
+            .map_err(|_| AUTHENTICATION_ERROR.to_owned())?;
+        if let Some(previous) = active.as_mut() {
+            previous.zeroize();
+        }
+        *active = token;
+        Ok(())
+    }
+
+    fn active_session(&self) -> Result<Option<String>, String> {
+        self.active_session_token
+            .lock()
+            .map(|token| token.clone())
+            .map_err(|_| AUTHENTICATION_ERROR.to_owned())
+    }
+
+    fn authenticated_actor(&self) -> Result<(String, sanket_domain::Role), String> {
+        let auth = self.auth_service()?;
+        let mut token = self
+            .active_session()?
+            .ok_or_else(|| String::from(AUTHENTICATION_ERROR))?;
+        let result = auth.validate_session(&token, current_time_secs());
+        token.zeroize();
+        match result {
+            Some(identity) => Ok(identity),
+            None => {
+                let _ = self.set_active_session(None);
+                Err(AUTHENTICATION_ERROR.into())
+            }
+        }
+    }
+
+    fn manager_actor(&self) -> Result<(String, sanket_domain::Role), String> {
+        let actor = self.authenticated_actor()?;
+        if actor.1.can_manage_members() {
+            Ok(actor)
+        } else {
+            Err(AUTHENTICATION_ERROR.into())
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatus {
+    pub ready: bool,
+    pub authenticated: bool,
+    pub account_id: Option<String>,
+    pub role: Option<sanket_domain::Role>,
+}
+
+impl AuthStatus {
+    fn unavailable() -> Self {
+        Self {
+            ready: false,
+            authenticated: false,
+            account_id: None,
+            role: None,
+        }
+    }
+
+    fn ready_unauthenticated() -> Self {
+        Self {
+            ready: true,
+            authenticated: false,
+            account_id: None,
+            role: None,
+        }
+    }
+
+    fn authenticated(account_id: String, role: sanket_domain::Role) -> Self {
+        Self {
+            ready: true,
+            authenticated: true,
+            account_id: Some(account_id),
+            role: Some(role),
+        }
+    }
+}
+
+fn current_time_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn login_with_state(state: &AppState, request: LoginRequest) -> Result<LoginResponse, String> {
+    let auth = state.auth_service()?;
+    let response = auth.login_at(request, current_time_secs());
+    if response.accepted {
+        let Some(token) = response.session_token.clone() else {
+            return Err(AUTHENTICATION_ERROR.into());
+        };
+        state.set_active_session(Some(token))?;
+    }
+    Ok(response)
+}
+
+fn auth_status_for_state(state: &AppState) -> AuthStatus {
+    let Some(auth) = state.auth_service.as_ref() else {
+        return AuthStatus::unavailable();
+    };
+    let Ok(token) = state.active_session() else {
+        return AuthStatus::unavailable();
+    };
+    let Some(mut token) = token else {
+        return AuthStatus::ready_unauthenticated();
+    };
+    let result = auth.validate_session(&token, current_time_secs());
+    token.zeroize();
+    match result {
+        Some((account_id, role)) => AuthStatus::authenticated(account_id, role),
+        None => {
+            let _ = state.set_active_session(None);
+            AuthStatus::ready_unauthenticated()
+        }
+    }
+}
+
+fn map_auth_error<T>(result: Result<T, auth::AuthError>) -> Result<T, String> {
+    result.map_err(|_| AUTHENTICATION_ERROR.to_owned())
+}
+
+#[tauri::command]
+fn bootstrap_owner(
+    state: tauri::State<'_, AppState>,
+    request: OwnerBootstrapRequest,
+) -> Result<LoginResponse, String> {
+    let auth = state.auth_service()?;
+    let mut password = Zeroizing::new(request.password.clone());
+    let login = request.email.clone();
+    map_auth_error(auth.bootstrap_owner_at(request, current_time_secs()))?;
+    let response = auth.login_at(
+        LoginRequest {
+            login,
+            password: std::mem::take(&mut *password),
+        },
+        current_time_secs(),
+    );
+    if !response.accepted {
+        return Err(AUTHENTICATION_ERROR.into());
+    }
+    let Some(token) = response.session_token.clone() else {
+        return Err(AUTHENTICATION_ERROR.into());
+    };
+    state.set_active_session(Some(token))?;
+    Ok(response)
+}
+
+#[tauri::command]
+fn login(
+    state: tauri::State<'_, AppState>,
+    request: LoginRequest,
+) -> Result<LoginResponse, String> {
+    login_with_state(&state, request)
+}
+
+#[tauri::command]
+fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut active = state
+        .active_session()?
+        .ok_or_else(|| AUTHENTICATION_ERROR.to_owned())?;
+    let result = state
+        .auth_service()?
+        .logout_at(&active, current_time_secs());
+    active.zeroize();
+    state.set_active_session(None)?;
+    map_auth_error(result)
+}
+
+#[tauri::command]
+fn issue_invite(
+    state: tauri::State<'_, AppState>,
+    mut request: InviteIssueRequest,
+) -> Result<IssuedInvite, String> {
+    let (actor_account_id, _) = state.manager_actor()?;
+    request.actor_account_id = actor_account_id;
+    map_auth_error(
+        state
+            .auth_service()?
+            .issue_invite_at(request, current_time_secs()),
+    )
+}
+
+#[tauri::command]
+fn complete_signup(
+    state: tauri::State<'_, AppState>,
+    request: SignupRequest,
+) -> Result<(), String> {
+    map_auth_error(
+        state
+            .auth_service()?
+            .complete_signup_at(request, current_time_secs()),
+    )
+}
+
+#[tauri::command]
+fn approve_account(
+    state: tauri::State<'_, AppState>,
+    mut request: AccountDecisionRequest,
+) -> Result<(), String> {
+    let (actor_account_id, _) = state.manager_actor()?;
+    request.actor_account_id = actor_account_id;
+    map_auth_error(
+        state
+            .auth_service()?
+            .approve_account_at(request, current_time_secs()),
+    )
+}
+
+#[tauri::command]
+fn revoke_account(
+    state: tauri::State<'_, AppState>,
+    mut request: AccountDecisionRequest,
+) -> Result<(), String> {
+    let (actor_account_id, _) = state.manager_actor()?;
+    request.actor_account_id = actor_account_id;
+    map_auth_error(
+        state
+            .auth_service()?
+            .revoke_account_at(request, current_time_secs()),
+    )
+}
+
+#[tauri::command]
+fn get_auth_status(state: tauri::State<'_, AppState>) -> AuthStatus {
+    auth_status_for_state(&state)
 }
 
 #[tauri::command]
@@ -114,11 +377,21 @@ fn get_app_status(state: tauri::State<'_, AppState>) -> AppStatus {
     state.status()
 }
 
+fn bind_onboarding_actor(
+    mut request: OnboardMemberRequest,
+    actor_account_id: String,
+) -> OnboardMemberRequest {
+    request.member_id = actor_account_id;
+    request
+}
+
 #[tauri::command]
 fn onboard_member(
     state: tauri::State<'_, AppState>,
     request: OnboardMemberRequest,
 ) -> Result<OnboardMemberResponse, String> {
+    let (actor_account_id, _) = state.manager_actor()?;
+    let request = bind_onboarding_actor(request, actor_account_id);
     if !request.consented {
         return Err("consent acknowledgement is required".to_owned());
     }
@@ -131,8 +404,13 @@ fn onboard_member(
 #[tauri::command]
 fn add_friend(
     state: tauri::State<'_, AppState>,
-    request: AddFriendRequest,
+    mut request: AddFriendRequest,
 ) -> Result<AddFriendResponse, String> {
+    let (actor_account_id, _) = state.manager_actor()?;
+    if request.owner_member_id != actor_account_id {
+        return Err(AUTHENTICATION_ERROR.into());
+    }
+    request.owner_member_id = actor_account_id;
     state
         .application()?
         .add_friend(request)
@@ -145,6 +423,10 @@ fn archive_friend(
     friend_id: String,
     owner_member_id: String,
 ) -> Result<(), String> {
+    let (actor_account_id, _) = state.manager_actor()?;
+    if owner_member_id != actor_account_id {
+        return Err(AUTHENTICATION_ERROR.into());
+    }
     state
         .application()?
         .archive_friend(&friend_id, &owner_member_id)
@@ -153,6 +435,7 @@ fn archive_friend(
 
 #[tauri::command]
 fn list_members(state: tauri::State<'_, AppState>) -> Result<Vec<MemberRow>, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .list_members()
@@ -161,6 +444,7 @@ fn list_members(state: tauri::State<'_, AppState>) -> Result<Vec<MemberRow>, Str
 
 #[tauri::command]
 fn list_friends(state: tauri::State<'_, AppState>) -> Result<Vec<FriendRow>, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .list_friends()
@@ -172,6 +456,7 @@ fn check_recommendation(
     state: tauri::State<'_, AppState>,
     request: CheckRequest,
 ) -> Result<CheckResponse, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .check(request)
@@ -181,8 +466,10 @@ fn check_recommendation(
 #[tauri::command]
 fn submit_investment(
     state: tauri::State<'_, AppState>,
-    request: SubmitRequest,
+    mut request: SubmitRequest,
 ) -> Result<SubmitResponse, String> {
+    let (actor_member_id, _) = state.authenticated_actor()?;
+    request.actor_member_id = actor_member_id;
     let request = state
         .upstox
         .prepare_submission(request)
@@ -196,8 +483,10 @@ fn submit_investment(
 #[tauri::command]
 fn record_historical_application(
     state: tauri::State<'_, AppState>,
-    request: HistoricalApplicationRequest,
+    mut request: HistoricalApplicationRequest,
 ) -> Result<HistoricalApplicationResponse, String> {
+    let (actor_member_id, _) = state.authenticated_actor()?;
+    request.actor_member_id = actor_member_id;
     state
         .application()?
         .record_historical_application(request)
@@ -207,8 +496,10 @@ fn record_historical_application(
 #[tauri::command]
 fn void_submitted_session(
     state: tauri::State<'_, AppState>,
-    request: VoidSessionRequest,
+    mut request: VoidSessionRequest,
 ) -> Result<VoidSessionResponse, String> {
+    let (actor_member_id, _) = state.authenticated_actor()?;
+    request.actor_member_id = actor_member_id;
     state
         .application()?
         .void_submitted_session(request)
@@ -217,6 +508,7 @@ fn void_submitted_session(
 
 #[tauri::command]
 fn get_dashboard(state: tauri::State<'_, AppState>) -> Result<Dashboard, String> {
+    state.authenticated_actor()?;
     state.application()?.dashboard().map_err(|e| e.to_string())
 }
 
@@ -224,6 +516,7 @@ fn get_dashboard(state: tauri::State<'_, AppState>) -> Result<Dashboard, String>
 fn list_allotment_candidates(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AllotmentCandidateRow>, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .list_allotment_candidates()
@@ -233,8 +526,10 @@ fn list_allotment_candidates(
 #[tauri::command]
 fn start_allotment_check(
     state: tauri::State<'_, AppState>,
-    request: StartAllotmentRequest,
+    mut request: StartAllotmentRequest,
 ) -> Result<AllotmentJobReport, String> {
+    let (actor_member_id, _) = state.authenticated_actor()?;
+    request.actor_member_id = actor_member_id;
     let report = state
         .application()?
         .enqueue_allotment_check(request)
@@ -247,6 +542,7 @@ fn start_allotment_check(
 
 #[tauri::command]
 fn cancel_allotment_job(state: tauri::State<'_, AppState>, job_id: String) -> Result<bool, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .cancel_allotment_job(&job_id)
@@ -258,6 +554,7 @@ fn get_allotment_report(
     state: tauri::State<'_, AppState>,
     job_id: String,
 ) -> Result<AllotmentJobReport, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .get_allotment_report(&job_id)
@@ -267,8 +564,10 @@ fn get_allotment_report(
 #[tauri::command]
 fn record_manual_allotment(
     state: tauri::State<'_, AppState>,
-    request: ManualAllotmentRequest,
+    mut request: ManualAllotmentRequest,
 ) -> Result<service::AllotmentReportRow, String> {
+    let (actor_member_id, _) = state.authenticated_actor()?;
+    request.actor_member_id = actor_member_id;
     state
         .application()?
         .record_manual_allotment_result(request)
@@ -278,8 +577,10 @@ fn record_manual_allotment(
 #[tauri::command]
 fn estimate_profit(
     state: tauri::State<'_, AppState>,
-    request: EstimateProfitRequest,
+    mut request: EstimateProfitRequest,
 ) -> Result<EstimatedProfitDto, String> {
+    let (actor_member_id, _) = state.authenticated_actor()?;
+    request.actor_member_id = actor_member_id;
     state
         .application()?
         .estimate_profit(request)
@@ -288,6 +589,7 @@ fn estimate_profit(
 
 #[tauri::command]
 fn get_security_status(state: tauri::State<'_, AppState>) -> Result<SecurityStatusDto, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .security_status()
@@ -299,6 +601,7 @@ fn get_lookup_authorization_status(
     state: tauri::State<'_, AppState>,
     application_id: String,
 ) -> Result<LookupAuthorizationStatusDto, String> {
+    state.authenticated_actor()?;
     state
         .application()?
         .get_lookup_authorization_status(&application_id)
@@ -308,8 +611,13 @@ fn get_lookup_authorization_status(
 #[tauri::command]
 fn authorize_real_investor_lookup(
     state: tauri::State<'_, AppState>,
-    request: LookupAuthorizationRequest,
+    mut request: LookupAuthorizationRequest,
 ) -> Result<LookupAuthorizationStatusDto, String> {
+    let (actor_member_id, role) = state.authenticated_actor()?;
+    if role != sanket_domain::Role::Owner {
+        return Err(AUTHENTICATION_ERROR.into());
+    }
+    request.actor_member_id = actor_member_id;
     state
         .application()?
         .authorize_real_investor_lookup(request)
@@ -318,6 +626,9 @@ fn authorize_real_investor_lookup(
 
 #[tauri::command]
 fn get_upstox_connection_status(state: tauri::State<'_, AppState>) -> ProviderConnectionStatusDto {
+    if state.authenticated_actor().is_err() {
+        return ProviderConnectionStatusDto::not_connected();
+    }
     status(&state.provider_credentials)
 }
 
@@ -326,6 +637,9 @@ fn connect_upstox_analytics_token(
     state: tauri::State<'_, AppState>,
     mut request: ConnectUpstoxAnalyticsTokenRequest,
 ) -> ProviderConnectionStatusDto {
+    if state.manager_actor().is_err() {
+        return ProviderConnectionStatusDto::not_connected();
+    }
     let token = std::mem::take(&mut request.token);
     request.token.clear();
     store_token(&state.provider_credentials, SecretValue::new(token))
@@ -336,6 +650,9 @@ fn replace_upstox_analytics_token(
     state: tauri::State<'_, AppState>,
     mut request: ConnectUpstoxAnalyticsTokenRequest,
 ) -> ProviderConnectionStatusDto {
+    if state.manager_actor().is_err() {
+        return ProviderConnectionStatusDto::not_connected();
+    }
     let token = std::mem::take(&mut request.token);
     request.token.clear();
     store_token(&state.provider_credentials, SecretValue::new(token))
@@ -343,6 +660,9 @@ fn replace_upstox_analytics_token(
 
 #[tauri::command]
 fn disconnect_upstox(state: tauri::State<'_, AppState>) -> ProviderConnectionStatusDto {
+    if state.manager_actor().is_err() {
+        return ProviderConnectionStatusDto::not_connected();
+    }
     disconnect(&state.provider_credentials)
 }
 
@@ -351,6 +671,7 @@ fn list_available_ipos(
     state: tauri::State<'_, AppState>,
     query: IpoListQuery,
 ) -> Result<IpoCatalogueDto, String> {
+    state.authenticated_actor()?;
     upstox::list_available_ipos(&state, query)
 }
 
@@ -359,6 +680,7 @@ fn refresh_ipo_catalog(
     state: tauri::State<'_, AppState>,
     query: IpoListQuery,
 ) -> Result<IpoCatalogueDto, String> {
+    state.authenticated_actor()?;
     upstox::refresh_ipo_catalog(&state, query)
 }
 
@@ -367,6 +689,7 @@ fn get_ipo_details(
     state: tauri::State<'_, AppState>,
     source_ipo_id: String,
 ) -> Result<IpoCatalogItemDto, String> {
+    state.authenticated_actor()?;
     upstox::get_ipo_details(&state, source_ipo_id)
 }
 
@@ -381,9 +704,7 @@ pub fn run() {
             let vault_root = app_data_dir.join("member-vault");
             let local_index = sanket_local_index::LocalIndex::open(&index_path)?;
             let schema_version = local_index.schema_version()?;
-            let mode = std::env::var("SANKET_SECURITY_MODE")
-                .map(|value| sanket_identity_security::RuntimeSecurityMode::parse(&value))
-                .unwrap_or(sanket_identity_security::RuntimeSecurityMode::DevelopmentSynthetic);
+            let mode = service::resolve_security_mode();
             let worker = worker::spawn_allotment_worker(
                 settings.device_id.clone(),
                 vault_root.clone(),
@@ -400,6 +721,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_status,
+            bootstrap_owner,
+            login,
+            logout,
+            issue_invite,
+            complete_signup,
+            approve_account,
+            revoke_account,
+            get_auth_status,
             onboard_member,
             add_friend,
             archive_friend,
@@ -429,4 +758,118 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Sanket IPO desktop runtime failed");
+}
+
+#[cfg(test)]
+mod native_auth_command_tests {
+    use super::*;
+
+    fn owner_state() -> AppState {
+        let root = tempfile::tempdir().expect("temporary auth root");
+        let state = AppState::build(
+            "device-native-auth-test".into(),
+            1,
+            root.path().join("vault"),
+            root.path().join("index.sqlite"),
+        );
+        let auth = state.auth_service.as_ref().expect("auth service");
+        auth.bootstrap_owner_at(
+            auth::OwnerBootstrapRequest {
+                account_id: "owner-1".into(),
+                email: "owner@example.invalid".into(),
+                password: "owner-password".into(),
+            },
+            100,
+        )
+        .expect("bootstrap owner");
+        std::mem::forget(root);
+        state
+    }
+
+    #[test]
+    fn compatibility_constructor_has_no_auth_vault_or_session() {
+        let state = AppState::new("device-status-only".into(), 1);
+        assert!(state.auth_service.is_none());
+        assert!(
+            state
+                .active_session_token
+                .lock()
+                .expect("session lock")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejected_login_cannot_install_native_session() {
+        let state = owner_state();
+        let response = login_with_state(
+            &state,
+            auth::LoginRequest {
+                login: "owner@example.invalid".into(),
+                password: "wrong-password".into(),
+            },
+        )
+        .expect("generic login response");
+        assert!(!response.accepted);
+        assert!(
+            state
+                .active_session_token
+                .lock()
+                .expect("session lock")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn accepted_login_is_visible_only_through_native_auth_status() {
+        let state = owner_state();
+        let response = login_with_state(
+            &state,
+            auth::LoginRequest {
+                login: "owner@example.invalid".into(),
+                password: "owner-password".into(),
+            },
+        )
+        .expect("login response");
+        assert!(response.accepted);
+        assert!(response.session_token.is_some());
+        let status = auth_status_for_state(&state);
+        assert!(status.ready);
+        assert!(status.authenticated);
+        assert_eq!(status.account_id.as_deref(), Some("owner-1"));
+    }
+
+    #[test]
+    fn onboarding_binds_member_identity_to_authenticated_account() {
+        let request = OnboardMemberRequest {
+            member_id: "ui-generated-member-id".into(),
+            display_name: "Owner".into(),
+            email: "owner@example.invalid".into(),
+            role: "OWNER".into(),
+            primary_account_label: None,
+            broker: None,
+            upi_id: String::new(),
+            pan: String::new(),
+            consented: true,
+        };
+        let bound = bind_onboarding_actor(request, "owner-1".into());
+        assert_eq!(bound.member_id, "owner-1");
+    }
+
+    #[test]
+    fn production_security_status_uses_os_keyring_label() {
+        assert_eq!(
+            security_status_label(sanket_identity_security::RuntimeSecurityMode::ProductionSecure),
+            "OS KEYRING (PRODUCTION_SECURE)"
+        );
+    }
+
+    #[test]
+    fn unavailable_auth_state_fails_closed_for_actor_validation() {
+        let state = AppState::new("device-status-only".into(), 1);
+        assert_eq!(
+            state.authenticated_actor(),
+            Err(AUTHENTICATION_ERROR.into())
+        );
+    }
 }

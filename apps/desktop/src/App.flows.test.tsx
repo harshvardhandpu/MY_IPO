@@ -7,6 +7,9 @@ function bridgeWith(
 ): CommandBridge {
   const mock = vi.fn(async (command: string, args?: Record<string, unknown>) => {
     const handler = handlers[command];
+    if (!handler && command === "get_auth_status") {
+      return { ready: true, authenticated: true };
+    }
     if (!handler) {
       throw new Error(`Unhandled command: ${command}`);
     }

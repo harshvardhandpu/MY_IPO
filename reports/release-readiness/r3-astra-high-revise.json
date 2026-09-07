@@ -1,0 +1,18 @@
+{
+  "gate": "SANKET-R3",
+  "release_phase": "R3_LINUX_RELEASE_READINESS",
+  "authority_role": "ASTRA_HIGH",
+  "authority_model": "gpt-6-astra",
+  "authority_provider": "openai-codex",
+  "invoked_at": "2026-09-07T14:28:39+05:30",
+  "session_id": "20260907_142839_56e276",
+  "decision": "REVISE",
+  "blockers": [
+    "The review attempt could not inspect the supplied report or repository before its bounded tool window ended.",
+    "Interactive GUI walkthrough was not claimed; the R3 card explicitly requires clean-profile smoke, not a separate interactive walkthrough.",
+    "Windows is a separate R4 card and is not a Linux blocker."
+  ],
+  "required_remediation": "Resubmit a compact evidence package with exact artifact, test, package, install/remove, and clean-profile facts; do not claim interactive GUI or Windows evidence.",
+  "no_commit": true,
+  "no_push": true
+}

@@ -1,0 +1,25 @@
+{
+  "gate": "SANKET-R1",
+  "release_phase": "R1_SECURITY_CLOSURE",
+  "authority_role": "ASTRA_HIGH",
+  "authority_model": "gpt-6-astra",
+  "authority_provider": "openai-codex",
+  "invoked_at": "2026-09-07T14:02:43+05:30",
+  "session_id": "20260907_140243_c9ae15",
+  "decision": "APPROVED",
+  "blockers": [],
+  "evidence_artifact": "reports/release-readiness/r1-security-closure-evidence.md",
+  "evidence_sha256": "c7c753cab2c6453bdcf1c8797cfcd7f4741455cdb35ae82aaea911e614b6f891",
+  "protected_head": "d3864557ee56282214733d44149cb2ed1fbc0ee6",
+  "rationale": "On the supplied evidence, SANKET-R1 Security Closure acceptance is complete: SEC-AUTH-01 has the required authority decision, BUG-AUTH-01 has direct ASTRA_HIGH approval, the stated security controls are covered, and focused tests and full gates pass. Close R1 and activate R2. This decision relies on the reported evidence, not independent artifact or hash verification. Linux/Windows package approval, platform install/clean-profile checks, release-package restart evidence, cross-platform acceptance, and final RELEASE READY remain open under R3/R4/downstream gates. No commit, push, or sensitive operation is authorized.",
+  "sensitive_operations": {
+    "pan_accessed": false,
+    "credential_value_accessed": false,
+    "keyring_value_accessed": false,
+    "live_business_provider_request": false,
+    "live_mufg_request": false,
+    "financial_mutation": false,
+    "commit_created": false,
+    "push_performed": false
+  }
+}

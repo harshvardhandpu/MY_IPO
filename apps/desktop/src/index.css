@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* Calm-dashboard design tokens for shadcn/ui components. `styles.css` stays
+   authoritative for existing layout/legacy classes; these tokens share the
+   same light, restrained palette so shadcn primitives (Badge, Tooltip, and
+   any future additions) read as part of one coherent system. */
+
+:root {
+  --background: #ffffff;
+  --foreground: #18221c;
+  --card: #ffffff;
+  --card-foreground: #18221c;
+  --popover: #ffffff;
+  --popover-foreground: #18221c;
+  --primary: #3454d1;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f5f8;
+  --secondary-foreground: #18221c;
+  --muted: #f3f5f8;
+  --muted-foreground: #5b6472;
+  --accent: #eef1fb;
+  --accent-foreground: #2c3f9e;
+  --destructive: #b33f39;
+  --destructive-foreground: #ffffff;
+  --success: #177a54;
+  --success-foreground: #ffffff;
+  --warning: #93620e;
+  --warning-foreground: #ffffff;
+  --border: #e3e7ec;
+  --input: #e3e7ec;
+  --ring: #3454d1;
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}

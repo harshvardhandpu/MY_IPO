@@ -62,6 +62,16 @@ impl MemberVault {
         &self.root
     }
 
+    /// Whether this vault-backed installation has no persisted state yet.
+    ///
+    /// This deliberately examines the authoritative vault root rather than
+    /// SQLite or projected member counts, so deleting/replacing a projection
+    /// cannot reset first-run authentication.
+    pub fn is_uninitialized(&self) -> Result<bool, MemberVaultError> {
+        let mut entries = fs::read_dir(&self.root)?;
+        Ok(entries.next().transpose()?.is_none())
+    }
+
     fn identity_dir(&self) -> PathBuf {
         self.root.join(SECURE_IDENTITY_DIR)
     }
