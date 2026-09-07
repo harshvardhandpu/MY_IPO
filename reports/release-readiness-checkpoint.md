@@ -9,7 +9,7 @@
 - `ZERO_INCREMENTAL_SPEND_REQUIRED = true`
 - Kanban is the only workflow state authority. This file is the single project checkpoint; `reports/release-readiness/initial-state-evidence.md` is evidence only.
 - No new product feature, provider, integration, analytics, dashboard, AI system, architecture layer, or aesthetic redesign may be created.
-- No PAN, credential value, keyring value, external provider token/request, MUFG request, financial mutation, commit, push, reset, or history rewrite occurred; tests generated only ephemeral synthetic session material in memory.
+- No PAN, credential value, keyring value, external provider token/request, MUFG request, financial mutation, reset, or history rewrite occurred. The accepted source was frozen locally in release commit `6afe4d75dd6fb0840f82714cecd5c707cfe5f571`; no push occurred.
 
 ## Current phase
 
@@ -24,11 +24,11 @@
 - Root: `/home/harshdev/HermesWorkspaces/MY_IPO`
 - Repository: `harshvardhandpu/MY_IPO`
 - Branch: `feature/aether-ui-redesign`
-- HEAD: `d3864557ee56282214733d44149cb2ed1fbc0ee6`
-- Tracking: branch is ahead 1 of `origin/feature/aether-ui-redesign`
-- Worktree: intentionally dirty before setup and remains dirty; current state includes the pre-existing frontend/package work, auth-domain/security changes, and this `reports/` evidence/checkpoint directory. Exact current state must be read from `git status --short`.
+- Release source commit: `6afe4d75dd6fb0840f82714cecd5c707cfe5f571`
+- Source snapshot SHA-256: `e9a9152b79d84233e179a08060e03d661cecfc47b5ee3608dd65515f229c5a53`
+- The accepted source worktree was clean at freeze; the release manifest and this checkpoint record post-build release metadata only.
 - `git diff --check`: PASS
-- No commit or push was created.
+- No push was created.
 
 ## Persistent Kanban
 
@@ -138,6 +138,21 @@ No speculative future cards were created.
 
 **CLOSED — ASTRA_HIGH APPROVED.** One build was run from source snapshot `f6554fc7c7228e8f27a26f16a8a75956732acfdf64275ca0406b6daf07c3f87`; all seven source identifiers matched after build. The final DEB hashes to `3cb2130d55db9796f55a4a0c75865af333de13dfb1ce8f9401b3e733ca405b47` (6,551,632 bytes), and its extracted final payload binary hashes to `a6d80bd8b954ef4e9fca1b7e826592b6552fcf08fd5419d06bb10b09f9aeb4b0` (20,236,048 bytes). The unbundled target hash is `f366d8fdc052c9e1d1cad6b76cfcbe6c8e7e90520c8976b910331334b32d15f7` with `UNK` marker; the packaged payload has `DEB` marker, same ELF Build ID/size, and is the authoritative release binary. ASTRA_HIGH approval artifact: `reports/release-readiness/r3-astra-high-approved.json`. Development synthetic mode remains the default when `SANKET_SECURITY_MODE` is unset; release packaging proves secure mode explicitly.
 
+## Finalization status
+
+**SANKET IPO LINUX V1 READY FOR USE.**
+
+- `LINUX_V1_READY = YES`
+- Manifest: `reports/release-readiness/release-manifest.md`
+- Final source commit: `6afe4d75dd6fb0840f82714cecd5c707cfe5f571`
+- Final DEB: `target/release/bundle/deb/Sanket IPO_0.1.0_amd64.deb`
+- Final DEB SHA-256: `0d823dce7cb003a003792673e93cf0e1b607794ee40e4890e6593c8df5035e08`
+- Final packaged binary SHA-256: `a6d80bd8b954ef4e9fca1b7e826592b6552fcf08fd5419d06bb10b09f9aeb4b0`
+- Final source and lockfile hashes, build command, install/start/restart smoke result, and spend status are recorded in the manifest.
+- R3 remains DONE and ASTRA_HIGH-approved; it was not reopened.
+
+**Windows remains `PENDING_NATIVE_VALIDATION`.** R4 remains blocked only by the existing native Windows capability gap. No Windows-ready claim is made.
+
 ## Windows readiness status
 
 **BLOCKED — NOT VERIFIED.** R4 produced Linux-side cross-target Windows build/package evidence, but no real Windows runner or host was available for required runtime acceptance. Verified partial artifacts: PE executable `/home/harshdev/.cache/sanket-r4-artifacts-target-win/x86_64-pc-windows-gnu/release/sanket-ipo.exe` SHA-256 `0d04dc00726423694a4036450d6acb91d56b44c7d38c234140896e4db2d40311` (31,274,471 bytes) and unsigned NSIS installer `/home/harshdev/.cache/sanket-r4-artifacts-target-win/x86_64-pc-windows-gnu/release/bundle/nsis/Sanket IPO_0.1.0_x64-setup.exe` SHA-256 `9a273ec5f7898ea765369c4dbf5a550a3a7bdf8599772eece22758b5b0bd1249` (6,651,857 bytes). Windows Credential Manager behavior, Windows data paths/ACLs, first launch/auth, restart/persistence, clean-profile no-admin installation, uninstall/data preservation, and WebView2 behavior remain unverified. Wine was attempted but is not accepted as Windows evidence.
@@ -156,7 +171,7 @@ No speculative future cards were created.
 | Windows install/smoke | BLOCKED | R4 partial cross-build/package evidence only; real Windows runtime host required |
 | Restart/persistence | NOT VERIFIED for release packages | development-level code/tests only; Windows runtime evidence remains open |
 | Secret scan | PASS | `npm run secrets` |
-| Critical/high blockers | FAIL | Linux/Windows platform evidence and final release authority remain open |
+| Critical/high blockers | WINDOWS ONLY | Linux V1 is READY; native Windows validation and final cross-platform approval remain open |
 | Zero incremental spend | PASS for setup | no paid provider or fallback used |
 | Final authority review | NOT RUN | final phase only; R1/R2 are closed, platform and cross-platform gates remain open |
 
@@ -202,7 +217,7 @@ The checkpoint’s own SHA-256 is captured by the final fresh readback command r
 - Workdir: `/home/harshdev/HermesWorkspaces/MY_IPO`
 - Board: `sanket-ipo-release-readiness`
 - Tool scope: unrestricted agent toolset for board/checkpoint reconciliation, worker routing, and authority invocation; no provider/MCP spend route unless explicitly authorized by the project policy.
-- Policy: fresh board/checkpoint/git reconciliation every tick; recover interrupted work; claim READY tasks; dispatch qualified workers; run tests; invoke ASTRA_MEDIUM or ASTRA_HIGH by scope; escalate automatically; remediate REVISE; close only evidence-backed gates; unlock successors; continue until RELEASE READY or true human-only exception; no speculative cards; no secrets/PAN/live providers; no commit/push; no worker self-approval.
+- Policy after Linux finalization: remain quiet while R4 is blocked; do not create cards, dispatch workers, rerun the completed route audit, run builds/tests, or manufacture work. A tick may inspect the existing checkpoint and known recovery evidence only. Reactivate Windows recovery only when new evidence appears of an available native Windows host, verified free CI route, or authorized connected Windows runner; then preserve the existing R4 card/evidence and resume its bounded gate flow. No secrets/PAN/live providers, no paid route, no worker self-approval, and no push.
 
 ## Human-only exceptions
 
@@ -215,7 +230,7 @@ No human action is required for routine engineering, tests, packaging repair, or
 - Supabase/cloud database work is post-release/optional and was not introduced.
 - Authentication cards were created because the repository’s own required-authentication section is not implemented in the live app; they are release repair, not feature expansion.
 - `TEST-SEC-001` was a test/environment defect; its existing isolated provider seam is verified and production keyring enforcement remains fail-closed.
-- The current uncommitted UI changes are preserved; no reset or discard was performed.
+- The accepted UI/auth/security source was frozen without functional changes in release commit `6afe4d75dd6fb0840f82714cecd5c707cfe5f571`.
 
 ## Latest autonomous verification
 
@@ -225,9 +240,9 @@ No human action is required for routine engineering, tests, packaging repair, or
 - Fresh R4 evidence: Windows cross-target `cargo check --workspace --target x86_64-pc-windows-gnu`, Windows release build, `npm run build`, Rust workspace tests, fmt, clippy, and `git diff --check` passed. PE executable and unsigned NSIS installer hashes were independently re-read and recorded above. `npm run check` is BLOCKED by the pre-existing Biome diagnostic in the approved R3 provenance JSON. Real Windows runtime acceptance remains unavailable; Wine is not accepted as a substitute.
 - Fresh R4 recovery: `SANKET-R4-RECOVERY` (`t_91d31dff`) audited the existing native host, local runner inventory, GitHub Actions `windows-latest`, connected CI, and configured Windows hosts. No native Windows host/self-hosted runner exists; GitHub Actions is private-repository usage with unverified billing allowance and no `workflow_dispatch`, while the accepted dirty source is not on the remote branch. Recovery artifact SHA-256 is `2d6ad70556cf54703a94283551569541557c08b06d4861f85b46bd7f846aa189`. No paid route, interactive authentication, secret access, commit, or push was used.
 - Fresh native board readback: `SEC-AUTH-01=done`, `BUG-AUTH-01=done`, `TEST-UI-001=done`, `SANKET-R1=done`, `SANKET-R2=done`, `SANKET-R3=done`, `SANKET-R4=blocked(capability)`; R3 remains ASTRA_HIGH-approved, R4 partial evidence is preserved with a typed capability block, and R5/FINAL remain dependency-gated. No commit or push.
-- The implementation and checkpoint changes remain uncommitted; no commit or push was performed.
+- The accepted implementation is frozen in release commit `6afe4d75dd6fb0840f82714cecd5c707cfe5f571`; release metadata is recorded in `reports/release-readiness/release-manifest.md`. No push was performed.
 - No PAN, credential value, keyring value, external provider/MUFG token/request, or financial mutation occurred; synthetic test session tokens were ephemeral and not retained.
 
 ## Next legitimate action
 
-- The bounded `SANKET-R4-RECOVERY` route audit is complete and recorded. `SANKET-R4` remains natively BLOCKED with a typed `capability` reason because no auditable zero-incremental-spend native Windows execution route is currently available. Do not promote R4, activate R5, or invoke phase/final authority from partial evidence. A future recovery may execute only on an existing authorized native Windows host/runner or a CI route whose cost, source provenance, permissions, and secret boundaries are independently verified. No provider integrations, PAN, keyring values, or unrelated UI changes.
+- Linux finalization is complete: `SANKET IPO LINUX V1 READY FOR USE`. The bounded `SANKET-R4-RECOVERY` route audit is complete and recorded. `SANKET-R4` remains natively BLOCKED with a typed `capability` reason because no auditable zero-incremental-spend native Windows execution route is currently available. Keep R5 and FINAL dependency-gated; do not promote R4 or invoke final cross-platform authority from partial evidence. Remain quiet until new native Windows capability evidence appears; do not recreate the recovery card or repeat the same route search.
