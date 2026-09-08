@@ -6,30 +6,58 @@
    any future additions) read as part of one coherent system. */
 
 :root {
-  --background: #ffffff;
-  --foreground: #18221c;
+  --background: #eef2ef;
+  --foreground: #14231b;
   --card: #ffffff;
-  --card-foreground: #18221c;
+  --card-foreground: #14231b;
   --popover: #ffffff;
-  --popover-foreground: #18221c;
-  --primary: #3454d1;
+  --popover-foreground: #14231b;
+  --primary: #1c6b4b;
   --primary-foreground: #ffffff;
-  --secondary: #f3f5f8;
-  --secondary-foreground: #18221c;
-  --muted: #f3f5f8;
-  --muted-foreground: #5b6472;
-  --accent: #eef1fb;
-  --accent-foreground: #2c3f9e;
-  --destructive: #b33f39;
+  --secondary: #f3f7f4;
+  --secondary-foreground: #14231b;
+  --muted: #f3f7f4;
+  --muted-foreground: #5d6c62;
+  --accent: #1c6b4b;
+  --accent-foreground: #ffffff;
+  --destructive: #ae4138;
   --destructive-foreground: #ffffff;
-  --success: #177a54;
+  --success: #126947;
   --success-foreground: #ffffff;
-  --warning: #93620e;
+  --warning: #805600;
   --warning-foreground: #ffffff;
-  --border: #e3e7ec;
-  --input: #e3e7ec;
-  --ring: #3454d1;
-  --radius: 0.75rem;
+  --border: #dce6df;
+  --input: #b6c7bc;
+  --ring: #1c6b4b;
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #101814;
+    --foreground: #e6eee9;
+    --card: #17231c;
+    --card-foreground: #e6eee9;
+    --popover: #17231c;
+    --popover-foreground: #e6eee9;
+    --primary: #58b889;
+    --primary-foreground: #0d1a13;
+    --secondary: #1d2b22;
+    --secondary-foreground: #e6eee9;
+    --muted: #1d2b22;
+    --muted-foreground: #aab9af;
+    --accent: #58b889;
+    --accent-foreground: #0d1a13;
+    --destructive: #e17b72;
+    --destructive-foreground: #24110f;
+    --success: #64c998;
+    --success-foreground: #0d1a13;
+    --warning: #e4b15b;
+    --warning-foreground: #241a0d;
+    --border: #2b3d31;
+    --input: #4d6755;
+    --ring: #73d39e;
+  }
 }
 
 @theme inline {
