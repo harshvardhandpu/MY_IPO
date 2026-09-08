@@ -28,6 +28,103 @@ const member = {
 };
 
 describe("functional desktop flows", () => {
+  it("creates the first owner through the camelCase Tauri request contract", async () => {
+    let authenticated = false;
+    const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "get_auth_status") {
+        return authenticated
+          ? { ready: true, authenticated: true, accountId: "owner-1", role: "Owner" }
+          : { ready: true, authenticated: false };
+      }
+      if (command === "bootstrap_owner") {
+        expect(args).toEqual({
+          request: {
+            accountId: "owner-1",
+            email: "owner@example.invalid",
+            password: "owner-password",
+          },
+        });
+        authenticated = true;
+        return { accepted: true };
+      }
+      if (command === "list_members") return [member];
+      if (command === "list_friends") return [];
+      if (command === "get_dashboard") {
+        return {
+          total_planned_paise: 0,
+          submitted_session_count: 0,
+          member_count: 1,
+          friend_count: 0,
+          profit_paise: 0,
+        };
+      }
+      throw new Error(`Unhandled command: ${command}`);
+    });
+
+    render(<App bridge={{ invoke: invoke as CommandBridge["invoke"] }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "First-run owner" }));
+    expect(screen.getByRole("button", { name: "First-run owner" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.change(screen.getByLabelText("Account ID"), { target: { value: "owner-1" } });
+    fireEvent.change(screen.getByLabelText("Owner email"), {
+      target: { value: "owner@example.invalid" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "owner-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create owner account" }));
+
+    expect(await screen.findByRole("button", { name: "Invest" })).toBeVisible();
+    expect(invoke).toHaveBeenCalledWith("bootstrap_owner", {
+      request: {
+        accountId: "owner-1",
+        email: "owner@example.invalid",
+        password: "owner-password",
+      },
+    });
+  });
+
+  it("surfaces an existing-owner bootstrap conflict without weakening login errors", async () => {
+    const bridge = bridgeWith({
+      get_auth_status: () => ({ ready: true, authenticated: false }),
+      bootstrap_owner: () => {
+        throw new Error("Owner account already exists. Sign in instead.");
+      },
+      login: () => ({ accepted: false }),
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "First-run owner" }));
+    expect(screen.getByRole("button", { name: "First-run owner" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.change(screen.getByLabelText("Account ID"), { target: { value: "owner-2" } });
+    fireEvent.change(screen.getByLabelText("Owner email"), {
+      target: { value: "second-owner@example.invalid" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "second-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create owner account" }));
+
+    expect(await screen.findByText("Owner account already exists. Sign in instead.")).toBeVisible();
+    expect(screen.queryByText("authentication failed")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.change(screen.getByLabelText("Email or login"), {
+      target: { value: "owner@example.invalid" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "wrong-password" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Sign in" })[1]);
+
+    expect(await screen.findByText("The login details could not be verified.")).toBeVisible();
+  });
+
   it("shows onboarding on an empty vault and sends identity only to the onboarding command", async () => {
     const bridge = bridgeWith({
       list_members: () => [],

@@ -31,6 +31,7 @@ use service::{
 use upstox::{IpoCatalogItemDto, IpoCatalogueDto, IpoListQuery};
 
 const AUTHENTICATION_ERROR: &str = "authentication failed";
+const OWNER_ALREADY_EXISTS_ERROR: &str = "Owner account already exists. Sign in instead.";
 
 fn security_status_label(mode: sanket_identity_security::RuntimeSecurityMode) -> &'static str {
     match mode {
@@ -263,7 +264,10 @@ fn auth_status_for_state(state: &AppState) -> AuthStatus {
 }
 
 fn map_auth_error<T>(result: Result<T, auth::AuthError>) -> Result<T, String> {
-    result.map_err(|_| AUTHENTICATION_ERROR.to_owned())
+    result.map_err(|error| match error {
+        auth::AuthError::OwnerAlreadyExists => OWNER_ALREADY_EXISTS_ERROR.to_owned(),
+        _ => AUTHENTICATION_ERROR.to_owned(),
+    })
 }
 
 #[tauri::command]
@@ -818,6 +822,26 @@ mod native_auth_command_tests {
                 .expect("session lock")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn second_owner_bootstrap_maps_to_sign_in_message() {
+        let state = owner_state();
+        let auth = state.auth_service.as_ref().expect("auth service");
+        let result = map_auth_error(auth.bootstrap_owner_at(
+            auth::OwnerBootstrapRequest {
+                account_id: "owner-2".into(),
+                email: "second-owner@example.invalid".into(),
+                password: "second-password".into(),
+            },
+            101,
+        ));
+
+        assert_eq!(
+            result,
+            Err("Owner account already exists. Sign in instead.".to_owned())
+        );
+        assert_eq!(auth.reconstruct_state().unwrap().owner_count(), 1);
     }
 
     #[test]

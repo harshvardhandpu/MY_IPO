@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-allotment"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -3288,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sanket-domain",
  "sanket-identity-security",
@@ -3298,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "rusqlite",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-device-settings"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3335,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-domain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sanket-identity-security",
  "serde",
@@ -3347,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-identity-security"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -3363,7 +3363,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-intelligence-vault"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3372,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-local-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "sanket-domain",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-member-vault"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sanket-domain",
  "sanket-identity-security",
@@ -3396,7 +3396,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-ranking"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "sanket-sync-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sanket-domain",
 ]

@@ -26,6 +26,8 @@ pub enum AuthError {
     Event(#[from] sanket_domain::EventError),
     #[error("password credential operation failed")]
     Credential(#[from] sanket_identity_security::PasswordCredentialError),
+    #[error("owner account already exists")]
+    OwnerAlreadyExists,
     #[error("authentication operation rejected")]
     Rejected,
     #[error("authentication operation is invalid: {0}")]
@@ -395,8 +397,8 @@ impl AuthService {
         now: u64,
     ) -> Result<(), AuthError> {
         let _guard = self.mutation_lock.lock().map_err(|_| AuthError::Rejected)?;
-        if !self.vault.is_uninitialized()? {
-            return Err(AuthError::Rejected);
+        if self.reconstruct_state()?.owner_count() > 0 {
+            return Err(AuthError::OwnerAlreadyExists);
         }
         if request.account_id.trim().is_empty() || request.email.trim().is_empty() {
             return Err(AuthError::Invalid("owner identity is required"));
@@ -768,6 +770,18 @@ mod tests {
             auth.bootstrap_owner_at(owner_request("second-password"), 101)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn first_owner_bootstrap_allows_existing_non_auth_vault_state() {
+        let vault = vault("legacy-state");
+        std::fs::create_dir(vault.root().join("_profiles")).unwrap();
+        let auth = AuthService::new(vault, "device-1");
+
+        auth.bootstrap_owner_at(owner_request("owner-password"), 100)
+            .expect("non-auth vault state must not block first owner creation");
+
+        assert_eq!(auth.reconstruct_state().unwrap().owner_count(), 1);
     }
 
     #[test]

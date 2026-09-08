@@ -951,49 +951,51 @@ function AuthGate({
           access is granted.
         </p>
       </section>
-      <form className="form-panel onboarding-form" onSubmit={submit}>
-        <div className="action-buttons" role="group" aria-label="Authentication mode">
+      <form className="form-panel onboarding-form auth-form" onSubmit={submit}>
+        <fieldset className="action-buttons auth-mode-buttons">
+          <legend className="sr-only">Authentication mode</legend>
           <button
-            className={mode === "login" ? "primary-button" : "secondary-button"}
+            aria-pressed={mode === "login"}
+            className="auth-mode-button"
             onClick={() => setMode("login")}
             type="button"
           >
             Sign in
           </button>
           <button
-            className={mode === "bootstrap" ? "primary-button" : "secondary-button"}
+            aria-pressed={mode === "bootstrap"}
+            className="auth-mode-button"
             onClick={() => setMode("bootstrap")}
             type="button"
           >
             First-run owner
           </button>
           <button
-            className={mode === "signup" ? "primary-button" : "secondary-button"}
+            aria-pressed={mode === "signup"}
+            className="auth-mode-button"
             onClick={() => setMode("signup")}
             type="button"
           >
             Invite signup
           </button>
-        </div>
+        </fieldset>
 
         {!status.ready && !error && (
-          <p className="inline-error" role="alert">
+          <p className="inline-error auth-error" role="alert">
             Authentication is unavailable. Try again.
           </p>
         )}
 
         {mode === "login" && (
-          <>
-            <label>
-              Email or login
-              <input
-                autoComplete="username"
-                required
-                value={login}
-                onChange={(event) => setLogin(event.target.value)}
-              />
-            </label>
-          </>
+          <label>
+            Email or login
+            <input
+              autoComplete="username"
+              required
+              value={login}
+              onChange={(event) => setLogin(event.target.value)}
+            />
+          </label>
         )}
 
         {mode === "bootstrap" && (
@@ -1061,11 +1063,15 @@ function AuthGate({
           />
         </label>
         {error && (
-          <p className="inline-error" role="alert">
+          <p className="inline-error auth-error" role="alert">
             {error}
           </p>
         )}
-        <button className="primary-button" disabled={busy || !status.ready} type="submit">
+        <button
+          className="primary-button auth-submit-button"
+          disabled={busy || !status.ready}
+          type="submit"
+        >
           {busy
             ? "Working…"
             : mode === "login"
