@@ -1,0 +1,29 @@
+{
+  "schema": "sanket-final-astra-high-platform-scoped-release/v1",
+  "authority_role": "ASTRA_HIGH",
+  "authority_route": {
+    "provider": "openai-codex",
+    "model": "gpt-6-astra",
+    "session_id": "20260908_093759_6741e1"
+  },
+  "decision": "APPROVE_PLATFORM_SCOPED_RELEASE",
+  "blockers": [],
+  "next_state": "RELEASED_SCOPED",
+  "linux_status": "READY / NATIVE VALIDATED",
+  "windows_status": "INSTALLER AVAILABLE / CROSS-BUILT ON LINUX / NATIVE WINDOWS RUNTIME VALIDATION PENDING",
+  "windows_native_runtime_validated": false,
+  "native_runtime_limitation": "Windows installer was cross-built on Linux using the Tauri/cargo-xwin NSIS path. Native Windows install/runtime smoke testing has not been performed.",
+  "manifest_artifact": "reports/release-readiness/release-manifest.md",
+  "manifest_sha256": "2214e69e7b51746ce9ddc203c4c34df50e56afe01ac17671157dea8c5ca6dd7e",
+  "r4_authority_artifact": "reports/release-readiness/r4-astra-high-cross-build-approved.json",
+  "r4_authority_sha256": "78d232573af8f5541c27ec63bd50da340462f11a191ccc7a6838a220364c3ce3",
+  "r5_authority_artifact": "reports/release-readiness/r5-astra-high-cross-platform-approved.json",
+  "r5_authority_sha256": "8dc43c098d306dabd0299bf24515ba0100e72b0f3211ba03fa90eedd2b2a56b0",
+  "linux_deb_sha256": "0d823dce7cb003a003792673e93cf0e1b607794ee40e4890e6593c8df5035e08",
+  "linux_payload_sha256": "a6d80bd8b954ef4e9fca1b7e826592b6552fcf08fd5419d06bb10b09f9aeb4b0",
+  "windows_installer_sha256": "5ec68f092e6fc0606df17cfd387f5e258896be13c79eda195020875c0ea886dc",
+  "windows_application_sha256": "1c11bc1d1fbbdefbbab184cc3a3376748d63c218ee5f94b7c4e44e818f9c9882",
+  "source_head": "e2a17b8d2115b200bf0262ff03fd0b44364e1518",
+  "source_snapshot_sha256": "f39787381b965dc01673ce2cf1d272a7ee6bd582507dc1bb7d6186f96b4f0321",
+  "rationale": "Based solely on the supplied evidence and explicit user-authorized policy, final platform-scoped release approval is justified. Linux has accepted R3 native lifecycle validation, and changes since its accepted product source commit are release documentation only. Windows has a successfully cross-built x86_64 MSVC application and NSIS installer with matching extracted payload identity, passing reported build and security checks, and accepted R4 and R5 scoped approvals. The PE32 i386 NSIS bootstrap does not contradict the AMD64 application payload. Native Windows installation, runtime, security integration, persistence, uninstall, and data-preservation behavior remain unvalidated. This limitation is explicitly permitted by the release policy and does not block Linux release or availability of the cross-built Windows installer. Approval does not establish Windows native readiness."
+}

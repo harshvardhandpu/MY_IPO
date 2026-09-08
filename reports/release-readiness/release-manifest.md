@@ -1,14 +1,16 @@
 # Sanket IPO v1 Release Manifest
 
-Generated: 2026-09-07T18:10:56+05:30
+Generated: 2026-09-08
 
 ## Release status
 
 **SANKET IPO v1**
 
-**LINUX:** READY / APPROVED
+**LINUX:** READY / NATIVE VALIDATED
 
-**WINDOWS:** PENDING NATIVE VALIDATION
+**WINDOWS:** INSTALLER AVAILABLE / CROSS-BUILT ON LINUX
+
+**WINDOWS_NATIVE_RUNTIME_VALIDATED = NO**
 
 **SECURITY:** PASS
 
@@ -20,8 +22,9 @@ Generated: 2026-09-07T18:10:56+05:30
 
 **LINUX_V1_READY = YES**
 
-The Linux release is ready for use. Windows is a separate platform-readiness
-blocker and is not represented as ready by this manifest.
+The Linux release is ready for use. The Windows installer is available as a
+Linux cross-built artifact, but native Windows install/runtime validation remains
+pending and is not represented as complete by this manifest.
 
 ## Immutable source identity
 
@@ -51,6 +54,26 @@ commit. No source files changed between the final gates, commit, and Linux build
 The packaged payload SHA-256 and ELF Build ID match the approved R3 Linux
 payload. R3 remains closed; no concrete regression evidence reopened it.
 
+## Windows cross-built artifact
+
+- **Target:** `x86_64-pc-windows-msvc`
+- **Build command:** `npm run tauri:build -- --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis --ci --no-sign`
+- **Windows application:** `/home/harshdev/HermesWorkspaces/MY_IPO/target/x86_64-pc-windows-msvc/release/sanket-ipo.exe`
+- **Windows application SHA-256:** `1c11bc1d1fbbdefbbab184cc3a3376748d63c218ee5f94b7c4e44e818f9c9882`
+- **Windows application size:** `15,137,792` bytes
+- **Windows NSIS installer:** `/home/harshdev/HermesWorkspaces/MY_IPO/target/x86_64-pc-windows-msvc/release/bundle/nsis/Sanket IPO_0.1.0_x64-setup.exe`
+- **Windows NSIS installer SHA-256:** `5ec68f092e6fc0606df17cfd387f5e258896be13c79eda195020875c0ea886dc`
+- **Windows NSIS installer size:** `4,106,322` bytes
+- **Extracted installer payload SHA-256:** `1c11bc1d1fbbdefbbab184cc3a3376748d63c218ee5f94b7c4e44e818f9c9882`
+- **Payload architecture:** PE32+ AMD64 (`IMAGE_FILE_MACHINE_AMD64`, `0x8664`)
+- **Installer stub note:** the Debian NSIS bootstrap stub is PE32 i386; the bundled Sanket payload is verified AMD64.
+- **Cross-build evidence:** `reports/release-readiness/r4-windows-cross-build-evidence.md`
+- **R4 authority:** `reports/release-readiness/r4-astra-high-cross-build-approved.json`
+- **R5 authority:** `reports/release-readiness/r5-astra-high-cross-platform-approved.json`
+
+The Windows installer was cross-built on Linux using the Tauri/cargo-xwin NSIS
+path. Native Windows install/runtime smoke testing has not been performed.
+
 ## Verification record
 
 Required final gates passed before the immutable source commit:
@@ -78,20 +101,33 @@ Final artifact verification passed:
 - No native Sanket process remained after the smoke run
 - No provider, registrar, MUFG, real-investor, financial, or PAN operation occurred
 
-## Windows status
+Windows Linux-observable gates also passed: MSVC-target Rust preflight, release
+cross-compilation, NSIS extraction, AMD64 payload verification, source/lockfile
+provenance readback, secret scan, and production frontend dev-server-marker scan.
+These checks do not establish native Windows runtime behavior.
 
-**KNOWN BLOCKER:** Native Windows execution environment unavailable.
+## Windows runtime limitation
 
-R4 remains blocked only by the previously verified missing native Windows
-execution capability. The existing bounded recovery evidence is retained at
-`reports/release-readiness/r4-native-windows-recovery.md`. No Wine result,
-cross-compile result, or static inspection is treated as native Windows
-acceptance evidence.
+`WINDOWS_INSTALLER_CROSS_BUILT = true` and `WINDOWS_NATIVE_RUNTIME_VALIDATED = false`.
+Native Windows execution, Credential Manager behavior, Windows app-data paths and
+ACLs, clean-profile startup, authentication/session behavior, WebView2 behavior,
+restart/persistence, secure mode, uninstall, and data preservation remain pending.
+The existing bounded native-route evidence is retained at
+`reports/release-readiness/r4-native-windows-recovery.md`; no Wine result is used
+as acceptance evidence.
 
-Required Windows evidence remains outstanding, including the native Windows
-build, installer and executable hashes, Credential Manager behavior,
-Windows app-data paths, clean-profile startup, restart/persistence, secure mode,
-and uninstall/data-preservation checks.
+R4 was approved by ASTRA_HIGH for the closest supported cross-built state, and R5
+was approved as scoped cross-platform acceptance. Neither approval claims Windows
+native runtime readiness.
+
+## Final authority
+
+- **Decision:** `APPROVE_PLATFORM_SCOPED_RELEASE`
+- **Authority:** ASTRA_HIGH via `openai-codex / gpt-6-astra`
+- **Authority artifact:** `reports/release-readiness/final-astra-high-platform-scoped-approved.json`
+- **Authority session:** `20260908_093759_6741e1`
+- **Final manifest status:** Linux is `READY / NATIVE VALIDATED`; Windows is `INSTALLER AVAILABLE / CROSS-BUILT ON LINUX / NATIVE WINDOWS RUNTIME VALIDATION PENDING`.
+- **Native Windows runtime claim:** `false`
 
 ## Governance and spend
 

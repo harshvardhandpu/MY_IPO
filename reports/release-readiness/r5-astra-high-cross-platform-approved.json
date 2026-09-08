@@ -1,0 +1,25 @@
+{
+  "schema": "sanket-r5-astra-high-cross-platform-approval/v1",
+  "authority_role": "ASTRA_HIGH",
+  "authority_route": {
+    "provider": "openai-codex",
+    "model": "gpt-6-astra",
+    "session_id": "20260908_093216_b34d04"
+  },
+  "decision": "APPROVE_CROSS_PLATFORM_SCOPED",
+  "blockers": [],
+  "next_phase": "FINAL",
+  "linux_native_validated": true,
+  "windows_installer_cross_built": true,
+  "windows_native_runtime_validated": false,
+  "native_runtime_limitation": "Windows installer was cross-built on Linux using the Tauri/cargo-xwin NSIS path. Native Windows install/runtime smoke testing has not been performed.",
+  "evidence_artifact": "reports/release-readiness/r5-cross-platform-acceptance.md",
+  "evidence_sha256": "140a82df075a4bf7144bece9a0dd040459a8754dccd0a9e61c2aa4d546151217",
+  "linux_deb_sha256": "0d823dce7cb003a003792673e93cf0e1b607794ee40e4890e6593c8df5035e08",
+  "linux_payload_sha256": "a6d80bd8b954ef4e9fca1b7e826592b6552fcf08fd5419d06bb10b09f9aeb4b0",
+  "windows_installer_sha256": "5ec68f092e6fc0606df17cfd387f5e258896be13c79eda195020875c0ea886dc",
+  "windows_application_sha256": "1c11bc1d1fbbdefbbab184cc3a3376748d63c218ee5f94b7c4e44e818f9c9882",
+  "source_head": "e2a17b8d2115b200bf0262ff03fd0b44364e1518",
+  "source_snapshot_sha256": "f39787381b965dc01673ce2cf1d272a7ee6bd582507dc1bb7d6186f96b4f0321",
+  "rationale": "The supplied evidence satisfies the user-authorized R5 scoped acceptance policy. R3 Linux native acceptance remains approved, with fresh DEB and executable readback and approved lifecycle evidence. R4 Windows cross-build approval is supported by source and lockfile provenance, unchanged accepted product code, a clean worktree, successful Windows compilation, a verified AMD64 executable, a valid NSIS installer with matching extracted payload, and passing reported security scans. The PE32 i386 NSIS bootstrap does not contradict the verified AMD64 application payload. Cross-compilation and artifact inspection establish installer availability, not native Windows runtime validation. All listed Windows native lifecycle and security-runtime checks remain pending; their unavailability is not a blocker under the explicit policy. R5 may close and SANKET-FINAL may activate only with the release states Linux READY / NATIVE VALIDATED and Windows INSTALLER AVAILABLE / CROSS-BUILT ON LINUX / NATIVE WINDOWS RUNTIME VALIDATION PENDING."
+}

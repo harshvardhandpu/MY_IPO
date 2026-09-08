@@ -1,0 +1,22 @@
+{
+  "schema": "sanket-r4-astra-high-cross-build-approval/v1",
+  "authority_role": "ASTRA_HIGH",
+  "authority_route": {
+    "provider": "openai-codex",
+    "model": "gpt-6-astra",
+    "session_id": "20260908_092706_abf95e"
+  },
+  "decision": "APPROVE_CROSS_BUILT_WINDOWS_ARTIFACT",
+  "blockers": [],
+  "next_phase": "R5",
+  "windows_installer_cross_built": true,
+  "windows_native_runtime_validated": false,
+  "native_runtime_limitation": "Windows installer was cross-built on Linux using the Tauri/cargo-xwin NSIS path. Native Windows install/runtime smoke testing has not been performed.",
+  "evidence_artifact": "reports/release-readiness/r4-windows-cross-build-evidence.md",
+  "evidence_sha256": "ba0989b046a7e21ecc6277b4562b82472610f3bb55f4226fa3ef7b81fe0258f0",
+  "installer_sha256": "5ec68f092e6fc0606df17cfd387f5e258896be13c79eda195020875c0ea886dc",
+  "application_sha256": "1c11bc1d1fbbdefbbab184cc3a3376748d63c218ee5f94b7c4e44e818f9c9882",
+  "source_head": "e2a17b8d2115b200bf0262ff03fd0b44364e1518",
+  "source_snapshot_sha256": "f39787381b965dc01673ce2cf1d272a7ee6bd582507dc1bb7d6186f96b4f0321",
+  "rationale": "The supplied evidence satisfies the user-authorized closest-supported R4 state. Source and lockfile provenance are recorded, product code is unchanged from the accepted Linux release, and pre/post-build integrity checks match. The requested cargo-xwin x86_64-pc-windows-msvc NSIS build passed. The standalone application and extracted installer payload are AMD64 PE32+ binaries with identical sizes and SHA-256 hashes. The i386 NSIS bootstrap stub does not contradict the verified x64 application payload. Reported source and binary security scans passed, and production frontend output contains none of the listed development-server markers. Approval is limited to the cross-built artifact and does not establish native Windows installation or runtime behavior. R4 may move to DONE and R5 is activated."
+}
