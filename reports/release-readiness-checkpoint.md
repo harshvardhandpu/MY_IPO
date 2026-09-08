@@ -142,6 +142,21 @@ No speculative future cards were created.
 
 **SANKET IPO LINUX V1 READY FOR USE.**
 
+### Visible program status
+
+- `LINUX_V1 = RELEASED / READY FOR USE`
+- `WINDOWS_V1 = PENDING_NATIVE_VALIDATION`
+- `CROSS_PLATFORM = PENDING_WINDOWS`
+- `SANKET-R3 = DONE`
+- `SANKET-R4 = BLOCKED`
+- `SANKET-R5 = TODO`
+- `SANKET-FINAL = TODO`
+
+The Windows capability block is platform-scoped and does not make Linux v1
+unusable or unreleased. R5 and FINAL remain open until native Windows evidence
+exists. No repeated recovery work is authorized while the Windows capability is
+unchanged.
+
 - `LINUX_V1_READY = YES`
 - Manifest: `reports/release-readiness/release-manifest.md`
 - Final source commit: `6afe4d75dd6fb0840f82714cecd5c707cfe5f571`
@@ -213,7 +228,7 @@ The checkpoint’s own SHA-256 is captured by the final fresh readback command r
 
 - Existing unrelated job `kinetic-autopilot` was not reused.
 - Sanket job: `sanket-ipo-release-autopilot` (`26ff3f32fa7d`)
-- Schedule: every 30 minutes, forever; local-only delivery; enabled after R3 approval.
+- Schedule: every 30 minutes, forever; local-only delivery; currently PAUSED while no new native Windows capability exists.
 - Workdir: `/home/harshdev/HermesWorkspaces/MY_IPO`
 - Board: `sanket-ipo-release-readiness`
 - Tool scope: unrestricted agent toolset for board/checkpoint reconciliation, worker routing, and authority invocation; no provider/MCP spend route unless explicitly authorized by the project policy.
