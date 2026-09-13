@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use sanket_identity_security::Pan;
 
 use crate::provider::{
-    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, HumanVerificationRequirement,
-    IssueDiscoveryMode, LookupKeyKind, NegativeResultProof, PositiveResultProof,
+    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, ConfirmedProviderIssue,
+    HumanVerificationRequirement, IssueDiscoveryMode, LookupKeyKind, NegativeResultProof,
+    PositiveResultProof,
     ProviderAllotmentResult, ProviderCapabilities, ProviderError, ProviderHealth,
     ProviderTransportKind, RegistrarIssue, SessionRequirement,
 };
@@ -75,7 +76,7 @@ impl BigshareProvider {
                     .iter()
                     .any(|issue: &BigshareIssue| issue.provider_issue_id == provider_issue_id)
             {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "bigshare issue bundle failed structural validation".into(),
                 ));
             }
@@ -88,7 +89,7 @@ impl BigshareProvider {
             });
         }
         if issues.is_empty() {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "bigshare issue bundle contained no recognized records".into(),
             ));
         }
@@ -97,31 +98,37 @@ impl BigshareProvider {
 
     /// Normalize an ASP.NET-wrapped `{"d": {...}}` structured result body.
     /// Recognized `Status` values map to typed operational states; every
-    /// unrecognized shape fails closed to Unknown — the financial outcome is
+    /// unrecognized shape fails closed to `ResponseChanged` — the financial outcome
     /// never guessed.
     pub fn parse_result_body(
         body: &str,
-        issue_confirmed: bool,
+        issue: Option<&ConfirmedProviderIssue>,
+        expected_ipo_name: &str,
         checked_at: &str,
         contract_fingerprint: &str,
     ) -> Result<ProviderAllotmentResult, ProviderError> {
         if contract_fingerprint != RESULT_FINGERPRINT {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "bigshare result fingerprint is not accepted".into(),
             ));
         }
 
-        let document: serde_json::Value = serde_json::from_str(body)
-            .map_err(|_| ProviderError::Unknown("bigshare result was not valid JSON".into()))?;
+        let document: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+            ProviderError::ResponseChanged("bigshare result was not valid JSON".into())
+        })?;
         let wrapper = document
             .as_object()
             .and_then(|object| object.get("d"))
-            .ok_or_else(|| ProviderError::Unknown("bigshare result wrapper changed".into()))?;
+            .ok_or_else(|| {
+                ProviderError::ResponseChanged("bigshare result wrapper changed".into())
+            })?;
 
         let status = wrapper
             .get("Status")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| ProviderError::Unknown("bigshare result status missing".into()))?;
+            .ok_or_else(|| {
+                ProviderError::ResponseChanged("bigshare result status missing".into())
+            })?;
 
         match status {
             "NOTFOUND" => Ok(ProviderAllotmentResult::not_found(
@@ -146,9 +153,13 @@ impl BigshareProvider {
                 contract_fingerprint,
             )
             .ok_or_else(|| ProviderError::Unknown("bigshare warming mapping failed".into())),
-            "OK" => {
-                Self::parse_ok_record(wrapper, issue_confirmed, checked_at, contract_fingerprint)
-            }
+            "OK" => Self::parse_ok_record(
+                wrapper,
+                issue,
+                expected_ipo_name,
+                checked_at,
+                contract_fingerprint,
+            ),
             _ => Err(ProviderError::Unknown(
                 "bigshare result status is not recognized".into(),
             )),
@@ -157,17 +168,18 @@ impl BigshareProvider {
 
     fn parse_ok_record(
         wrapper: &serde_json::Value,
-        issue_confirmed: bool,
+        issue: Option<&ConfirmedProviderIssue>,
+        expected_ipo_name: &str,
         checked_at: &str,
         contract_fingerprint: &str,
     ) -> Result<ProviderAllotmentResult, ProviderError> {
         // Structure first: every required OK-record field must be present.
         let record = wrapper
             .as_object()
-            .ok_or_else(|| ProviderError::Unknown("bigshare OK record changed".into()))?;
+            .ok_or_else(|| ProviderError::ResponseChanged("bigshare OK record changed".into()))?;
         for field in ["APPLICATION_NO", "DPID", "Name", "APPLIED", "ALOTED"] {
             if !record.contains_key(field) {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "bigshare OK record is incomplete".into(),
                 ));
             }
@@ -176,10 +188,10 @@ impl BigshareProvider {
             .get("MatchCount")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| {
-                ProviderError::Unknown("bigshare match count missing or non-numeric".into())
+                ProviderError::ResponseChanged("bigshare match count missing or non-numeric".into())
             })?;
         if match_count != 1 {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "bigshare result was empty or ambiguous".into(),
             ));
         }
@@ -194,9 +206,14 @@ impl BigshareProvider {
         let allotted_shares = allotted
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| {
-                ProviderError::Unknown("bigshare allotted shares were not numeric".into())
+                ProviderError::ResponseChanged("bigshare allotted shares were not numeric".into())
             })?;
 
+        let issue = issue.filter(|identity| {
+            identity.provider_id() == "bigshare-live"
+                && identity.matches_expected_name(expected_ipo_name)
+        });
+        let issue_confirmed = issue.is_some();
         if allotted_shares == 0 {
             let proof = NegativeResultProof::new(true, issue_confirmed, true, true, true)
                 .map_err(|_| ProviderError::Unknown("bigshare negative proof failed".into()))?;
@@ -206,7 +223,10 @@ impl BigshareProvider {
                 contract_fingerprint,
             ))
         } else {
-            let proof = PositiveResultProof::new(true, true, true, true)?;
+            let issue = issue
+                .filter(|identity| identity.provider_id() == "bigshare-live")
+                .ok_or(ProviderError::IssueNotAvailable)?;
+            let proof = PositiveResultProof::new(issue, true, true, true)?;
             ProviderAllotmentResult::confirmed_allotted(
                 proof,
                 allotted_shares,

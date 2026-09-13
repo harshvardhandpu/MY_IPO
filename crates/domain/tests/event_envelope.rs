@@ -37,6 +37,26 @@ fn changed_event_content_fails_integrity_check() {
 }
 
 #[test]
+fn unsafe_event_ids_are_rejected_when_sealing_or_deserializing() {
+    for unsafe_id in ["../outside", "nested/event", "nested\\event", ".", ".."] {
+        let mut new_event = device_event();
+        new_event.event_id = unsafe_id.into();
+        assert!(
+            EventEnvelope::seal(new_event).is_err(),
+            "seal should reject {unsafe_id:?}"
+        );
+
+        let envelope = EventEnvelope::seal(device_event()).expect("seal valid event");
+        let mut serialized = serde_json::to_value(envelope).expect("serialize valid event");
+        serialized["event_id"] = serde_json::json!(unsafe_id);
+        assert!(
+            serde_json::from_value::<EventEnvelope>(serialized).is_err(),
+            "deserialize should reject {unsafe_id:?}"
+        );
+    }
+}
+
+#[test]
 fn legacy_ipo_event_without_metadata_keeps_its_hash() {
     let event = NewEvent {
         event_id: "event-ipo-01".into(),
@@ -90,6 +110,8 @@ fn lookup_authorization_event_names_and_payload_are_safe() {
         authorization_id: "lookup-auth-1".into(),
         application_id: "application-1".into(),
         provider_id: "mufg-intime-live".into(),
+        execution_id: "execution-1".into(),
+        account_ids: vec!["account-1".into()],
         timestamp: "1788210900".into(),
     };
 

@@ -207,8 +207,8 @@ fn stale_lease_allows_safe_recovery() {
     // Recovery: a new worker takes over and the job still completes.
     assert!(app.run_allotment_job_once(&job_id).unwrap());
     let report = app.get_allotment_report(&job_id).unwrap();
-    assert_eq!(report.status, "COMPLETE", "stale lease must be recoverable");
-    assert_eq!(report.accounts[0].status, "ALLOTTED"); // fixture ALLOTTED
+    assert_eq!(report.status, "UNRESOLVED", "stale lease must be recoverable");
+    assert_eq!(report.accounts[0].status, "UNRESOLVED");
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn finalized_job_never_reexecutes() {
     let (app, _index, job_id) = queued_job();
     assert!(app.run_allotment_job_once(&job_id).unwrap());
     let first = app.get_allotment_report(&job_id).unwrap();
-    assert_eq!(first.status, "COMPLETE");
+    assert_eq!(first.status, "UNRESOLVED");
 
     // After completion the boundary must refuse re-execution (Ok(false)).
     assert!(
@@ -224,7 +224,7 @@ fn finalized_job_never_reexecutes() {
         "COMPLETE jobs must never re-execute"
     );
     let second = app.get_allotment_report(&job_id).unwrap();
-    assert_eq!(second.status, "COMPLETE");
+    assert_eq!(second.status, "UNRESOLVED");
     // Idempotence: same terminal account result, no duplicate execution rows.
     assert_eq!(second.accounts[0].status, first.accounts[0].status);
 }

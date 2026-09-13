@@ -100,6 +100,8 @@ pub enum AttemptStatus {
     RateLimited,
     ProviderUnavailable,
     RetryableError,
+    IssueNotAvailable,
+    ResponseChanged,
     ManualResult,
     Cancelled,
 }
@@ -119,6 +121,8 @@ impl AttemptStatus {
             Self::RateLimited => "RATE_LIMITED",
             Self::ProviderUnavailable => "PROVIDER_UNAVAILABLE",
             Self::RetryableError => "RETRYABLE_ERROR",
+            Self::IssueNotAvailable => "ISSUE_NOT_AVAILABLE",
+            Self::ResponseChanged => "RESPONSE_CHANGED",
             Self::ManualResult => "MANUAL_RESULT",
             Self::Cancelled => "CANCELLED",
         }
@@ -135,19 +139,89 @@ impl AttemptStatus {
             NormalizedAllotmentStatus::RateLimited => Self::RateLimited,
             NormalizedAllotmentStatus::ProviderUnavailable => Self::ProviderUnavailable,
             NormalizedAllotmentStatus::RetryableError => Self::RetryableError,
+            NormalizedAllotmentStatus::IssueNotAvailable => Self::IssueNotAvailable,
+            NormalizedAllotmentStatus::ResponseChanged => Self::ResponseChanged,
             NormalizedAllotmentStatus::ManualResult => Self::ManualResult,
+        }
+    }
+
+    pub const fn is_final(self) -> bool {
+        matches!(self, Self::Allotted | Self::NotAllotted)
+    }
+}
+
+/// Account-level resolution state. Operational outcomes never become final
+/// allotment results merely because retries have ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AllotmentResolutionState {
+    WaitingForAuthorization,
+    LookupRunning,
+    InteractionRequired,
+    RetryableProviderFailure,
+    Unresolved,
+    FinalAllotted,
+    FinalNotAllotted,
+    ManualConfirmed,
+    ConflictReviewRequired,
+}
+
+impl AllotmentResolutionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WaitingForAuthorization => "WAITING_FOR_AUTHORIZATION",
+            Self::LookupRunning => "LOOKUP_RUNNING",
+            Self::InteractionRequired => "INTERACTION_REQUIRED",
+            Self::RetryableProviderFailure => "RETRYABLE_PROVIDER_FAILURE",
+            Self::Unresolved => "UNRESOLVED",
+            Self::FinalAllotted => "FINAL_ALLOTTED",
+            Self::FinalNotAllotted => "FINAL_NOT_ALLOTTED",
+            Self::ManualConfirmed => "MANUAL_CONFIRMED",
+            Self::ConflictReviewRequired => "CONFLICT_REVIEW_REQUIRED",
         }
     }
 
     pub const fn is_final(self) -> bool {
         matches!(
             self,
-            Self::Allotted
-                | Self::NotAllotted
-                | Self::NotFound
-                | Self::ManualResult
-                | Self::Cancelled
+            Self::FinalAllotted | Self::FinalNotAllotted | Self::ManualConfirmed
         )
+    }
+
+    pub fn from_attempt_status(
+        status: &str,
+        retry_scheduled: bool,
+        manual_confirmed: bool,
+    ) -> Self {
+        if manual_confirmed && matches!(status, "ALLOTTED" | "NOT_ALLOTTED") {
+            return Self::ManualConfirmed;
+        }
+        match status {
+            "PENDING" => {
+                if retry_scheduled {
+                    Self::RetryableProviderFailure
+                } else {
+                    Self::WaitingForAuthorization
+                }
+            }
+            "PREPARING_PROVIDER_SESSION" => Self::LookupRunning,
+            "RUNNING" => Self::LookupRunning,
+            "CONFLICT_REVIEW_REQUIRED" => Self::ConflictReviewRequired,
+            "NEEDS_HUMAN_VERIFICATION" | "VERIFICATION_REQUIRED_REFRESH" => {
+                Self::InteractionRequired
+            }
+            "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "RETRYABLE_ERROR" => {
+                if retry_scheduled {
+                    Self::RetryableProviderFailure
+                } else {
+                    Self::Unresolved
+                }
+            }
+            "ALLOTTED" => Self::FinalAllotted,
+            "NOT_ALLOTTED" => Self::FinalNotAllotted,
+            "MANUAL_RESULT" if manual_confirmed => Self::ManualConfirmed,
+            _ => Self::Unresolved,
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 use sanket_allotment::{
-    AllotmentLookupContext, AllotmentProvider, IssueDiscoveryMode, LookupKeyKind,
+    AllotmentLookupContext, AllotmentProvider, ConfirmedProviderIssue, IssueDiscoveryMode,
+    LookupKeyKind,
     NormalizedAllotmentStatus, ProviderHealth, ProviderResultProvenance, RegistrarIssue,
     SanitizedFixtureProvenance, SessionRequirement,
 };
@@ -30,15 +31,61 @@ fn parse_case(name: &str) -> String {
     serde_json::to_string(&cases[name]).unwrap()
 }
 
+fn confirmed_issue() -> ConfirmedProviderIssue {
+    ConfirmedProviderIssue::new(
+        "bigshare-live",
+        "9001",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap()
+}
+
 fn parse_result(
     body: &str,
 ) -> Result<sanket_allotment::ProviderAllotmentResult, sanket_allotment::ProviderError> {
     sanket_allotment::BigshareProvider::parse_result_body(
         body,
-        true,
+        Some(&confirmed_issue()),
+        "SYNTHETIC ALPHA LIMITED",
         "2026-08-28T17:48:00Z",
         "bigshare-result-d-status-v1",
     )
+}
+
+#[test]
+fn positive_result_without_issue_confirmation_is_unresolved() {
+    let error = sanket_allotment::BigshareProvider::parse_result_body(
+        &parse_case("ok_allotted"),
+        None,
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-28T17:48:00Z",
+        "bigshare-result-d-status-v1",
+    )
+    .expect_err("wrong or unconfirmed issue must not produce allotment");
+    assert_eq!(
+        error.to_status(),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
+    let wrong_provider_issue = ConfirmedProviderIssue::new(
+        "kfintech-live",
+        "9001",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap();
+    let wrong_error = sanket_allotment::BigshareProvider::parse_result_body(
+        &parse_case("ok_allotted"),
+        Some(&wrong_provider_issue),
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-28T17:48:00Z",
+        "bigshare-result-d-status-v1",
+    )
+    .expect_err("wrong provider issue must not produce allotment");
+    assert_eq!(
+        wrong_error.to_status(),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
 }
 
 // ---------------------------------------------------------------
@@ -92,7 +139,10 @@ fn rejects_duplicate_issue_ids() {
     let error =
         sanket_allotment::BigshareProvider::parse_issue_bundle(duplicate, "2026-08-28T17:48:00Z")
             .expect_err("duplicate provider issue ids must fail closed");
-    assert_eq!(error.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(
+        error.to_status(),
+        NormalizedAllotmentStatus::ResponseChanged
+    );
 }
 
 // ---------------------------------------------------------------
@@ -238,14 +288,14 @@ fn ok_null_shares_is_pending() {
 fn ok_text_zero_is_never_not_allotted() {
     let err = parse_result(&parse_case("ok_zero_text"))
         .expect_err("text share count cannot prove a negative");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn ok_multi_match_is_never_not_allotted() {
     let err = parse_result(&parse_case("ok_multi_match"))
         .expect_err("multiple matched records are ambiguous");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
@@ -259,38 +309,39 @@ fn unknown_status_fails_closed() {
 fn missing_status_fails_closed() {
     let err =
         parse_result(&parse_case("missing_status")).expect_err("missing status must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn drifted_wrapper_fails_closed() {
     let err =
         parse_result(&parse_case("changed_wrapper")).expect_err("drifted wrapper must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn rejected_fingerprint_fails_closed() {
     let err = sanket_allotment::BigshareProvider::parse_result_body(
         &parse_case("ok_allotted"),
-        true,
+        Some(&confirmed_issue()),
+        "SYNTHETIC ALPHA LIMITED",
         "2026-08-28T17:48:00Z",
         "some-other-fingerprint",
     )
     .expect_err("unaccepted contract fingerprint must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn non_json_body_fails_closed() {
     let err = parse_result("<html>maintenance</html>").expect_err("non-json must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn empty_body_fails_closed() {
     let err = parse_result("").expect_err("empty body must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
@@ -440,9 +491,6 @@ fn restart_requires_fresh_challenge_and_refresh_transition() {
         ProviderContinuationReference::new("continuation-2").unwrap(),
     )
     .unwrap();
-    assert_ne!(
-        expired.continuation_reference(),
-        fresh.continuation_reference()
-    );
+    assert_ne!(expired, fresh);
     assert_eq!(fresh.status(), HumanVerificationStatus::Required);
 }

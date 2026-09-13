@@ -14,6 +14,8 @@ pub enum NormalizedAllotmentStatus {
     RateLimited,
     ProviderUnavailable,
     RetryableError,
+    IssueNotAvailable,
+    ResponseChanged,
     ManualResult,
 }
 
@@ -29,16 +31,15 @@ impl NormalizedAllotmentStatus {
             Self::RateLimited => "RATE_LIMITED",
             Self::ProviderUnavailable => "PROVIDER_UNAVAILABLE",
             Self::RetryableError => "RETRYABLE_ERROR",
+            Self::IssueNotAvailable => "ISSUE_NOT_AVAILABLE",
+            Self::ResponseChanged => "RESPONSE_CHANGED",
             Self::ManualResult => "MANUAL_RESULT",
         }
     }
 
-    /// Final account outcomes that should not auto-retry.
+    /// Definitive provider outcomes. Every other state remains unresolved.
     pub const fn is_final(self) -> bool {
-        matches!(
-            self,
-            Self::Allotted | Self::NotAllotted | Self::NotFound | Self::ManualResult
-        )
+        matches!(self, Self::Allotted | Self::NotAllotted)
     }
 
     pub const fn is_retryable(self) -> bool {
@@ -50,7 +51,7 @@ impl NormalizedAllotmentStatus {
 
     /// Map free-form provider text. Ambiguous text becomes Unknown — never NotAllotted.
     pub fn from_provider_text(text: &str) -> Self {
-        let t = text.trim().to_ascii_uppercase();
+        let t = text.trim().to_ascii_uppercase().replace('_', " ");
         if t.is_empty() {
             return Self::Unknown;
         }
@@ -59,6 +60,12 @@ impl NormalizedAllotmentStatus {
         }
         if t.contains("RATE") && t.contains("LIMIT") {
             return Self::RateLimited;
+        }
+        if t.contains("ISSUE") && t.contains("NOT AVAILABLE") {
+            return Self::IssueNotAvailable;
+        }
+        if t.contains("RESPONSE") && t.contains("CHANGED") {
+            return Self::ResponseChanged;
         }
         if t.contains("UNAVAILABLE") || t.contains("TIMEOUT") || t.contains("503") {
             return Self::ProviderUnavailable;
@@ -104,6 +111,33 @@ mod tests {
         assert_eq!(
             NormalizedAllotmentStatus::from_provider_text("Sorry, not allotted"),
             NormalizedAllotmentStatus::NotAllotted
+        );
+    }
+
+    #[test]
+    fn unresolved_provider_states_are_not_final() {
+        for status in [
+            NormalizedAllotmentStatus::NotFound,
+            NormalizedAllotmentStatus::Unknown,
+            NormalizedAllotmentStatus::NeedsHumanVerification,
+            NormalizedAllotmentStatus::ProviderUnavailable,
+            NormalizedAllotmentStatus::ManualResult,
+        ] {
+            assert!(!status.is_final(), "{status:?} must remain unresolved");
+        }
+        assert!(NormalizedAllotmentStatus::Allotted.is_final());
+        assert!(NormalizedAllotmentStatus::NotAllotted.is_final());
+    }
+
+    #[test]
+    fn typed_operational_labels_parse_with_underscores() {
+        assert_eq!(
+            NormalizedAllotmentStatus::from_provider_text("ISSUE_NOT_AVAILABLE"),
+            NormalizedAllotmentStatus::IssueNotAvailable
+        );
+        assert_eq!(
+            NormalizedAllotmentStatus::from_provider_text("RESPONSE_CHANGED"),
+            NormalizedAllotmentStatus::ResponseChanged
         );
     }
 }

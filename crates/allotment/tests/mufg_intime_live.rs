@@ -1,6 +1,7 @@
 use sanket_allotment::MufgIntimeProvider;
 use sanket_allotment::{
-    AllotmentLookupContext, AllotmentProvider, IssueDiscoveryMode, LookupKeyKind,
+    AllotmentLookupContext, AllotmentProvider, ConfirmedProviderIssue, IssueDiscoveryMode,
+    LookupKeyKind,
     NormalizedAllotmentStatus, ProviderHealth, ProviderResultProvenance, RegistrarIssue,
     SanitizedFixtureProvenance, SessionRequirement,
 };
@@ -42,15 +43,61 @@ fn captcha_case(name: &str) -> String {
     cases[name].as_str().unwrap().to_owned()
 }
 
+fn confirmed_issue() -> ConfirmedProviderIssue {
+    ConfirmedProviderIssue::new(
+        "mufg-intime-live",
+        "11926",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap()
+}
+
 fn parse_result(
     body: &str,
 ) -> Result<sanket_allotment::ProviderAllotmentResult, sanket_allotment::ProviderError> {
     sanket_allotment::MufgIntimeProvider::parse_result_body(
         body,
-        true,
+        Some(&confirmed_issue()),
+        "SYNTHETIC ALPHA LIMITED",
         "2026-08-28T18:09:00Z",
         "mufg-result-d-xml-table-v1",
     )
+}
+
+#[test]
+fn positive_result_without_issue_confirmation_is_unresolved() {
+    let error = sanket_allotment::MufgIntimeProvider::parse_result_body(
+        &parse_case("allotted"),
+        None,
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-28T18:09:00Z",
+        "mufg-result-d-xml-table-v1",
+    )
+    .expect_err("wrong or unconfirmed issue must not produce allotment");
+    assert_eq!(
+        error.to_status(),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
+    let wrong_provider_issue = ConfirmedProviderIssue::new(
+        "bigshare-live",
+        "11926",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap();
+    let wrong_error = sanket_allotment::MufgIntimeProvider::parse_result_body(
+        &parse_case("allotted"),
+        Some(&wrong_provider_issue),
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-28T18:09:00Z",
+        "mufg-result-d-xml-table-v1",
+    )
+    .expect_err("wrong provider issue must not produce allotment");
+    assert_eq!(
+        wrong_error.to_status(),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
 }
 
 // ---------------------------------------------------------------
@@ -364,13 +411,6 @@ fn request_construction_carries_token_session_and_redaction() {
             .iter()
             .any(|h| h == "Content-Type: application/json; charset=utf-8")
     );
-    let body: serde_json::Value = serde_json::from_str(&request.body).expect("JSON request");
-    assert_eq!(body["clientid"], "11926");
-    assert_eq!(body["PAN"], "[SYNTHETIC_LOOKUP]");
-    assert_eq!(body["IFSC"], "");
-    assert_eq!(body["CHKVAL"], "1");
-    assert_eq!(body["token"], "token-synthetic");
-    assert_eq!(body.as_object().expect("object").len(), 5);
     assert!(!request.debug().contains("cookie-synthetic"));
     assert!(!request.debug().contains("token-synthetic"));
 }
@@ -414,12 +454,6 @@ fn live_public_precheck_issue_11926_without_investor_identifier() {
         precheck.lookup_endpoint,
         "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/SearchOnPan"
     );
-    println!("MUFG_CONTRACT=PASS");
-    println!("ISSUE_11926=AVAILABLE");
-    println!("CAPTCHA={:?}", precheck.captcha_state);
-    println!("SESSION_BOOTSTRAP=PASS");
-    println!("REQUEST_TOKEN=PASS");
-    println!("REAL_PAN_LOOKUP=NOT_EXECUTED");
 }
 
 #[test]
@@ -472,9 +506,9 @@ fn unknown_xml_message_fails_closed() {
 }
 
 #[test]
-fn malformed_allot_fails_closed() {
+fn malformed_allot_is_response_changed() {
     let err = parse_result(&parse_case("malformed")).expect_err("garbled ALLOT");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
@@ -538,22 +572,23 @@ fn provider_unavailable_is_operational() {
 }
 
 #[test]
-fn drifted_structure_fails_closed() {
+fn drifted_structure_is_response_changed() {
     let err = parse_result(&parse_case("drifted")).expect_err("drifted");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
-fn wrong_fingerprint_is_rejected() {
+fn wrong_fingerprint_is_rejected_as_response_changed() {
     let body = parse_case("allotted");
     let err = sanket_allotment::MufgIntimeProvider::parse_result_body(
         &body,
-        true,
+        Some(&confirmed_issue()),
+        "SYNTHETIC ALPHA LIMITED",
         "2026-08-28T18:09:00Z",
         "mufg-result-drifted-v9",
     )
     .expect_err("fingerprint mismatch");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]

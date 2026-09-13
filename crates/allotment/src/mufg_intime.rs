@@ -25,8 +25,9 @@ use sanket_identity_security::Pan;
 
 use crate::http::{HttpPolicyError, SharedHttpClient, TIMEOUT_SECS};
 use crate::provider::{
-    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, HumanVerificationRequirement,
-    IssueDiscoveryMode, LookupKeyKind, NegativeResultProof, PositiveResultProof,
+    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, ConfirmedProviderIssue,
+    HumanVerificationRequirement, IssueDiscoveryMode, LookupKeyKind, NegativeResultProof,
+    PositiveResultProof,
     ProviderAllotmentResult, ProviderCapabilities, ProviderError, ProviderHealth,
     ProviderTransportKind, RealInvestorLookupPermit, RegistrarIssue, SessionRequirement,
 };
@@ -137,6 +138,7 @@ pub struct MufgIntimeProvider {
 struct MufgLiveSession {
     http: SharedHttpClient,
     issue: MufgIssue,
+    confirmed_issue: ConfirmedProviderIssue,
     captcha_state: MufgCaptchaState,
     encrypted_token: Zeroizing<String>,
 }
@@ -165,7 +167,7 @@ impl MufgIntimeProvider {
         let mut rest = xml_payload(bundle)?;
         while let Some((provider_issue_id, after_id)) = tagged_value(&rest, "company_id") {
             let Some((display_name, after_name)) = tagged_value(after_id, "companyname") else {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "mufg issue record is incomplete".into(),
                 ));
             };
@@ -180,7 +182,7 @@ impl MufgIntimeProvider {
                     .iter()
                     .any(|issue: &MufgIssue| issue.provider_issue_id == provider_issue_id)
             {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "mufg issue bundle failed structural validation".into(),
                 ));
             }
@@ -193,7 +195,7 @@ impl MufgIntimeProvider {
             });
         }
         if issues.is_empty() {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "mufg issue bundle contained no recognized records".into(),
             ));
         }
@@ -217,30 +219,31 @@ impl MufgIntimeProvider {
                 continue;
             }
             let end = start
-                + normalized[start..]
-                    .find('>')
-                    .ok_or_else(|| ProviderError::Unknown("mufg token field changed".into()))?;
+                + normalized[start..].find('>').ok_or_else(|| {
+                    ProviderError::ResponseChanged("mufg token field changed".into())
+                })?;
             let element = &body[start..=end];
             let id = html_attribute(element, "id")?;
             let name = html_attribute(element, "name")?;
             if id.is_some_and(|value| value.eq_ignore_ascii_case("hidToken"))
                 || name.is_some_and(|value| value.eq_ignore_ascii_case("hidToken"))
             {
-                let extracted = html_attribute(element, "value")?
-                    .ok_or_else(|| ProviderError::Unknown("mufg token field changed".into()))?;
+                let extracted = html_attribute(element, "value")?.ok_or_else(|| {
+                    ProviderError::ResponseChanged("mufg token field changed".into())
+                })?;
                 if token.is_some() {
-                    return Err(ProviderError::Unknown(
+                    return Err(ProviderError::ResponseChanged(
                         "mufg token response contains multiple tokens".into(),
                     ));
                 }
                 if extracted.is_empty() {
-                    return Err(ProviderError::Unknown("mufg token is empty".into()));
+                    return Err(ProviderError::ResponseChanged("mufg token is empty".into()));
                 }
                 token = Some(extracted.to_owned());
             }
             offset = end + 1;
         }
-        token.ok_or_else(|| ProviderError::Unknown("mufg token missing".into()))
+        token.ok_or_else(|| ProviderError::ResponseChanged("mufg token missing".into()))
     }
 
     /// Current MUFG token endpoint contract: ASP.NET JSON wrapper with one
@@ -251,7 +254,7 @@ impl MufgIntimeProvider {
             || token.len() > 128
             || !token.bytes().all(|byte| byte.is_ascii_alphanumeric())
         {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "mufg generated token failed structural validation".into(),
             ));
         }
@@ -261,7 +264,7 @@ impl MufgIntimeProvider {
     /// Match the public page's CryptoJS AES-128-CBC/PKCS#7 token transform.
     pub fn encrypt_request_token(token: &str) -> Result<String, ProviderError> {
         if token.is_empty() || token.len() > 128 {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "mufg generated token failed structural validation".into(),
             ));
         }
@@ -300,14 +303,14 @@ impl MufgIntimeProvider {
                 "Content-Type: application/json; charset=utf-8".to_owned(),
                 "Accept: application/json".to_owned(),
             ],
-            body: serde_json::json!({
+            body: Zeroizing::new(serde_json::json!({
                 "clientid": issue_code,
                 "PAN": "[SYNTHETIC_LOOKUP]",
                 "IFSC": "",
                 "CHKVAL": "1",
                 "token": session.request_token.as_str(),
             })
-            .to_string(),
+            .to_string()),
         })
     }
 }
@@ -320,7 +323,7 @@ pub struct MufgLookupRequest {
     pub method: String,
     pub content_type: String,
     pub headers: Vec<String>,
-    pub body: String,
+    body: Zeroizing<String>,
 }
 
 impl MufgLookupRequest {
@@ -376,12 +379,13 @@ impl MufgIntimeProvider {
     /// to typed operational errors, never financial statuses.
     pub fn parse_result_body(
         body: &str,
-        issue_confirmed: bool,
+        issue: Option<&ConfirmedProviderIssue>,
+        expected_ipo_name: &str,
         checked_at: &str,
         contract_fingerprint: &str,
     ) -> Result<ProviderAllotmentResult, ProviderError> {
         if contract_fingerprint != RESULT_FINGERPRINT {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "mufg result fingerprint is not accepted".into(),
             ));
         }
@@ -424,26 +428,32 @@ impl MufgIntimeProvider {
             "RFNDAMT",
         ] {
             let Some(_) = tagged_value(&payload, field) else {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "mufg result record is incomplete".into(),
                 ));
             };
         }
 
-        let (_, after_shares) = tagged_value(&payload, "SHARES")
-            .ok_or_else(|| ProviderError::Unknown("mufg result record is incomplete".into()))?;
-        let (allot_raw, _) = tagged_value(after_shares, "ALLOT")
-            .ok_or_else(|| ProviderError::Unknown("mufg result record is incomplete".into()))?;
+        let (_, after_shares) = tagged_value(&payload, "SHARES").ok_or_else(|| {
+            ProviderError::ResponseChanged("mufg result record is incomplete".into())
+        })?;
+        let (allot_raw, _) = tagged_value(after_shares, "ALLOT").ok_or_else(|| {
+            ProviderError::ResponseChanged("mufg result record is incomplete".into())
+        })?;
         if allot_raw.trim().is_empty() {
             return Ok(ProviderAllotmentResult::pending(
                 checked_at,
                 contract_fingerprint,
             ));
         }
-        let allotted_shares = allot_raw
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| ProviderError::Unknown("mufg allotted shares were not numeric".into()))?;
+        let allotted_shares = allot_raw.trim().parse::<u64>().map_err(|_| {
+            ProviderError::ResponseChanged("mufg allotted shares were not numeric".into())
+        })?;
+        let issue = issue.filter(|identity| {
+            identity.provider_id() == "mufg-intime-live"
+                && identity.matches_expected_name(expected_ipo_name)
+        });
+        let issue_confirmed = issue.is_some();
 
         if allotted_shares == 0 {
             let proof = NegativeResultProof::new(true, issue_confirmed, true, true, true)
@@ -454,7 +464,10 @@ impl MufgIntimeProvider {
                 contract_fingerprint,
             ))
         } else {
-            let proof = PositiveResultProof::new(true, true, true, true)?;
+            let issue = issue
+                .filter(|identity| identity.provider_id() == "mufg-intime-live")
+                .ok_or(ProviderError::IssueNotAvailable)?;
+            let proof = PositiveResultProof::new(issue, true, true, true)?;
             ProviderAllotmentResult::confirmed_allotted(
                 proof,
                 allotted_shares,
@@ -519,7 +532,7 @@ impl MufgIntimeProvider {
             )
             .map_err(map_http_error)?;
         if !http.has_cookie("in.mpms.mufg.com", "/", "ASP.NET_SessionId") {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "mufg session bootstrap did not establish the required cookie".into(),
             ));
         }
@@ -538,10 +551,17 @@ impl MufgIntimeProvider {
             .map_err(map_http_error)?;
         let issues = Self::parse_issue_bundle(&issue_bundle, &observed_at)?;
         let issue = resolve_issue(issues, issue_code, expected_name)?;
+        let confirmed_issue = ConfirmedProviderIssue::new(
+            "mufg-intime-live",
+            &issue.provider_issue_id,
+            expected_name,
+            &issue.display_name,
+        )?;
 
         Ok(MufgLiveSession {
             http,
             issue,
+            confirmed_issue,
             captcha_state,
             encrypted_token,
         })
@@ -562,8 +582,8 @@ impl MufgIntimeProvider {
                 ));
             }
             MufgCaptchaState::Unknown => {
-                return Err(ProviderError::Unknown(
-                    "mufg captcha state is ambiguous".into(),
+                return Err(ProviderError::NeedsHuman(
+                    "mufg captcha state requires owner verification".into(),
                 ));
             }
         }
@@ -590,7 +610,13 @@ impl MufgIntimeProvider {
                 TIMEOUT_SECS,
             )
             .map_err(map_http_error)?;
-        Self::parse_result_body(&response, true, &now_rfc3339()?, RESULT_FINGERPRINT)
+        Self::parse_result_body(
+            &response,
+            Some(&session.confirmed_issue),
+            &context.issue.ipo_name,
+            &now_rfc3339()?,
+            RESULT_FINGERPRINT,
+        )
     }
 }
 
@@ -620,22 +646,34 @@ fn resolve_issue(
             "mufg issue selector is invalid".into(),
         ));
     }
+
     let expected_name = normalized_issue_name(expected_name);
-    let mut matches = issues.into_iter().filter(|issue| {
-        issue_code.is_none_or(|code| issue.provider_issue_id == code)
-            && normalized_issue_name(&issue.display_name) == expected_name
-    });
-    let Some(issue) = matches.next() else {
-        return Err(ProviderError::Unavailable(
-            "mufg requested issue is not available".into(),
-        ));
+    let name_matches: Vec<_> = issues
+        .into_iter()
+        .filter(|issue| normalized_issue_name(&issue.display_name) == expected_name)
+        .collect();
+    let candidates = if let Some(code) = issue_code {
+        let code_matches: Vec<_> = name_matches
+            .iter()
+            .filter(|issue| issue.provider_issue_id == code)
+            .cloned()
+            .collect();
+        if code_matches.is_empty() {
+            name_matches
+        } else {
+            code_matches
+        }
+    } else {
+        name_matches
     };
-    if matches.next().is_some() {
-        return Err(ProviderError::Unknown(
+
+    match candidates.as_slice() {
+        [] => Err(ProviderError::IssueNotAvailable),
+        [issue] => Ok(issue.clone()),
+        _ => Err(ProviderError::Unknown(
             "mufg issue selector was ambiguous".into(),
-        ));
+        )),
     }
-    Ok(issue)
 }
 
 fn normalized_issue_name(name: &str) -> String {
@@ -726,8 +764,8 @@ impl AllotmentProvider for MufgIntimeProvider {
             MufgCaptchaState::Required => Err(ProviderError::NeedsHuman(
                 "mufg requires owner-completed human verification".into(),
             )),
-            MufgCaptchaState::Unknown => Err(ProviderError::Unknown(
-                "mufg captcha state is ambiguous".into(),
+            MufgCaptchaState::Unknown => Err(ProviderError::NeedsHuman(
+                "mufg captcha state requires owner verification".into(),
             )),
         }
     }
@@ -762,12 +800,12 @@ impl AllotmentProvider for MufgIntimeProvider {
 /// Any wrapper change fails closed.
 fn xml_payload(body: &str) -> Result<String, ProviderError> {
     let document: serde_json::Value = serde_json::from_str(body)
-        .map_err(|_| ProviderError::Unknown("mufg result was not valid JSON".into()))?;
+        .map_err(|_| ProviderError::ResponseChanged("mufg result was not valid JSON".into()))?;
     let payload = document
         .as_object()
         .and_then(|object| object.get("d"))
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| ProviderError::Unknown("mufg result wrapper changed".into()))?;
+        .ok_or_else(|| ProviderError::ResponseChanged("mufg result wrapper changed".into()))?;
     Ok(payload.to_owned())
 }
 
@@ -795,7 +833,7 @@ fn html_attribute<'a>(tag: &'a str, name: &str) -> Result<Option<&'a str>, Provi
             cursor += 1;
         }
         if normalized.as_bytes().get(cursor) != Some(&b'=') {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "mufg token attribute changed".into(),
             ));
         }
@@ -811,12 +849,12 @@ fn html_attribute<'a>(tag: &'a str, name: &str) -> Result<Option<&'a str>, Provi
             .as_bytes()
             .get(cursor)
             .filter(|quote| **quote == b'\'' || **quote == b'"')
-            .ok_or_else(|| ProviderError::Unknown("mufg token attribute changed".into()))?;
+            .ok_or_else(|| ProviderError::ResponseChanged("mufg token attribute changed".into()))?;
         let value_start = cursor + 1;
         let value_end = normalized[value_start..]
             .find(char::from(quote))
             .map(|relative_end| value_start + relative_end)
-            .ok_or_else(|| ProviderError::Unknown("mufg token attribute changed".into()))?;
+            .ok_or_else(|| ProviderError::ResponseChanged("mufg token attribute changed".into()))?;
         return Ok(Some(&tag[value_start..value_end]));
     }
     Ok(None)
@@ -843,14 +881,16 @@ fn captcha_element_evidence(page: &str) -> Result<Vec<CaptchaEvidence>, Provider
             let end = page[start + 4..]
                 .find("-->")
                 .map(|relative| start + 4 + relative + 3)
-                .ok_or_else(|| ProviderError::Unknown("mufg captcha markup changed".into()))?;
+                .ok_or_else(|| {
+                    ProviderError::ResponseChanged("mufg captcha markup changed".into())
+                })?;
             cursor = end;
             continue;
         }
         let end = start
-            + page[start..]
-                .find('>')
-                .ok_or_else(|| ProviderError::Unknown("mufg captcha markup changed".into()))?;
+            + page[start..].find('>').ok_or_else(|| {
+                ProviderError::ResponseChanged("mufg captcha markup changed".into())
+            })?;
         let tag = &page[start..=end];
         let Some((name, closing)) = html_tag_name(tag) else {
             cursor = end + 1;
@@ -861,7 +901,9 @@ fn captcha_element_evidence(page: &str) -> Result<Vec<CaptchaEvidence>, Provider
             let script_end = page[end + 1..]
                 .find("</script>")
                 .map(|relative| end + 1 + relative + "</script>".len())
-                .ok_or_else(|| ProviderError::Unknown("mufg captcha script changed".into()))?;
+                .ok_or_else(|| {
+                    ProviderError::ResponseChanged("mufg captcha script changed".into())
+                })?;
             cursor = script_end;
             continue;
         }
@@ -972,4 +1014,94 @@ fn tagged_value<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
         return None;
     }
     Some((value.trim().to_owned(), &text[end + close.len()..]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn issue(id: &str, name: &str) -> MufgIssue {
+        MufgIssue {
+            provider_issue_id: id.into(),
+            display_name: name.into(),
+            discovered_at: "2026-09-09T00:00:00Z".into(),
+            source_url: DISCOVERY_URL.into(),
+            structural_fingerprint: ISSUE_FINGERPRINT.into(),
+        }
+    }
+
+    #[test]
+    fn missing_requested_issue_is_typed_not_available() {
+        let error = resolve_issue(
+            vec![issue("11926", "Different Company Limited - IPO")],
+            Some("99999"),
+            "Symbiotec Pharmalab Limited",
+        )
+        .expect_err("missing requested issue");
+        assert_eq!(
+            error.to_status(),
+            crate::status::NormalizedAllotmentStatus::IssueNotAvailable
+        );
+    }
+
+    #[test]
+    fn public_issue_name_matching_is_normalized_and_unique() {
+        let resolved = resolve_issue(
+            vec![issue("11926", "Symbiotec Pharmalab Limited - IPO")],
+            None,
+            " symbiotec pharmalab limited ",
+        )
+        .expect("unique normalized issue");
+        assert_eq!(resolved.provider_issue_id, "11926");
+    }
+
+    #[test]
+    fn stale_issue_code_falls_back_to_unique_normalized_name() {
+        let resolved = resolve_issue(
+            vec![issue("11927", "Symbiotec Pharmalab Limited - IPO")],
+            Some("11926"),
+            "Symbiotec Pharmalab Limited",
+        )
+        .expect("unique name match should recover a stale cached issue id");
+        assert_eq!(resolved.provider_issue_id, "11927");
+    }
+
+    #[test]
+    fn ambiguous_normalized_issue_match_is_unresolved() {
+        let error = resolve_issue(
+            vec![
+                issue("11926", "Symbiotec Pharmalab Limited - IPO"),
+                issue("11927", "Symbiotec Pharmalab Limited - IPO"),
+            ],
+            Some("99999"),
+            "Symbiotec Pharmalab Limited",
+        )
+        .expect_err("ambiguous issuer match must not confirm an issue");
+        assert_eq!(
+            error.to_status(),
+            crate::status::NormalizedAllotmentStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn lookup_request_keeps_transport_body_private_and_zeroizing() {
+        let session = MufgEphemeralSession::new(
+            "session-1",
+            "cookie-synthetic",
+            "token-synthetic",
+            "2026-09-09T00:00:00Z",
+            Some("2026-09-09T01:00:00Z".into()),
+        )
+        .expect("session");
+        let request = MufgIntimeProvider::build_lookup_request(
+            &session,
+            "11926",
+            "2026-09-09T00:30:00Z",
+        )
+        .expect("request");
+        let body: serde_json::Value = serde_json::from_str(&request.body).expect("body");
+        assert_eq!(body["token"], "token-synthetic");
+        assert!(!request.debug().contains("token-synthetic"));
+        assert!(!request.debug().contains("cookie-synthetic"));
+    }
 }

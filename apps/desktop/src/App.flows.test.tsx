@@ -500,6 +500,125 @@ describe("functional desktop flows", () => {
     expect(screen.queryByText("ABCDE1234F")).not.toBeInTheDocument();
   });
 
+  it("requires an explicit manual outcome and official provenance", async () => {
+    const report = {
+      job_id: "job-manual-1",
+      application_id: "app-manual-1",
+      ipo_name: "Symbiotec Pharmalab Limited",
+      registrar_id: "mufg_intime",
+      registrar_name: "MUFG Intime India",
+      provider_id: "mufg-intime-live",
+      status: "UNRESOLVED",
+      official_status_url: "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx",
+      checked_at: "2026-09-09T12:00:00Z",
+      final_count: 0,
+      pending_count: 1,
+      accounts: [
+        {
+          attempt_id: "attempt-manual-1",
+          account_id: "member-1",
+          display_name: "Owner",
+          account_kind: "PRIMARY",
+          masked_pan: "ABCDE****F",
+          application_amount_paise: 1482000,
+          status: "PROVIDER_UNAVAILABLE",
+          allotted_lots: null,
+          allotted_shares: null,
+          provider_id: "mufg-intime-live",
+          registrar_id: "mufg_intime",
+          source: "AUTOMATED_PROVIDER",
+          provenance: "PROVIDER_OPERATIONAL_STATE",
+          checked_at: "2026-09-09T12:00:00Z",
+          safe_provider_reference: null,
+          human_verification_state: null,
+          estimated_profit_paise: null,
+          profit_basis: "UNAVAILABLE",
+        },
+      ],
+    };
+    const bridge = bridgeWith({
+      list_members: () => [member],
+      list_friends: () => [],
+      get_dashboard: () => ({
+        total_planned_paise: 1482000,
+        submitted_session_count: 1,
+        member_count: 1,
+        friend_count: 0,
+        profit_paise: 0,
+      }),
+      get_security_status: () => ({
+        mode: "DEVELOPMENT_SYNTHETIC",
+        key_provider: "in-memory-dev",
+        real_pan_allowed: false,
+        os_keyring_release_blocker: true,
+        blocker: "Real PAN is blocked",
+      }),
+      list_allotment_candidates: () => [
+        {
+          application_id: "app-manual-1",
+          session_id: "session-manual-1",
+          ipo_name: "Symbiotec Pharmalab Limited",
+          planned_amount_paise: 1482000,
+          account_count: 1,
+          registrar_id: "mufg_intime",
+          registrar_name: "MUFG Intime India",
+          provider_id: "mufg-intime-live",
+          provider_name: "MUFG Intime",
+          official_status_url: "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx",
+          provider_health: "DEGRADED",
+          expected_allotment_date: "2026-09-03",
+          pending_count: 1,
+          final_count: 0,
+          last_checked: null,
+          overall_job_state: "READY_TO_CHECK",
+        },
+      ],
+      start_allotment_check: () => report,
+      get_allotment_report: () => report,
+      record_manual_allotment: (args) => {
+        expect(args).toEqual({
+          request: {
+            job_id: "job-manual-1",
+            account_id: "member-1",
+            actor_member_id: "member-1",
+            result: "ALLOTTED",
+            allotted_lots: 1,
+            allotted_shares: 35,
+            explicit_not_allotted: false,
+            official_source: "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx",
+            note: "Official result page confirmed allotment",
+          },
+        });
+        return report.accounts[0];
+      },
+    });
+
+    render(<App bridge={bridge} />);
+    const navigation = await screen.findByRole("navigation", { name: "Primary navigation" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "Check Allotment" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check All Accounts" }));
+
+    const result = await screen.findByLabelText("Result");
+    expect(result).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Select result..." })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Report not allotted" })).not.toBeInTheDocument();
+
+    fireEvent.change(result, { target: { value: "ALLOTTED" } });
+    fireEvent.change(screen.getByLabelText("Lots"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Shares"), { target: { value: "35" } });
+    fireEvent.change(screen.getByLabelText("Official source"), {
+      target: { value: "https://in.mpms.mufg.com/Initial_Offer/IPO.aspx" },
+    });
+    fireEvent.change(screen.getByLabelText("Note"), {
+      target: { value: "Official result page confirmed allotment" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save manual provenance" }));
+
+    await waitFor(() =>
+      expect(bridge.invoke).toHaveBeenCalledWith("record_manual_allotment", expect.anything()),
+    );
+  });
+
   it("records an owner-affirmed historical application without recommendation or lookup", async () => {
     const bridge = bridgeWith({
       list_members: () => [member],

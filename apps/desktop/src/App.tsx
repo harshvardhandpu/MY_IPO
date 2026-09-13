@@ -207,6 +207,7 @@ interface AllotmentReportRow {
   registrar_id: string;
   source: string;
   provenance: string;
+  resolution_state?: string;
   application_amount_paise: number;
   checked_at?: string | null;
   safe_provider_reference?: string | null;
@@ -404,7 +405,9 @@ function sourceLabel(source: string): string {
 }
 
 function provenanceLabel(provenance: string): string {
-  return provenance === "MANUAL" ? "Manual result" : "Registrar result";
+  if (provenance.includes("MANUAL")) return "Manual result";
+  if (provenance === "CONFLICTING_EVIDENCE") return "Conflicting evidence";
+  return "Registrar result";
 }
 
 type StatusTone = "positive" | "negative" | "warning" | "info" | "unknown";
@@ -428,7 +431,38 @@ function statusPresentation(status: string): StatusPresentation {
     PROVIDER_UNAVAILABLE: { label: "Provider Unavailable", glyph: "!", tone: "warning" },
     RETRYABLE_ERROR: { label: "Retry Required", glyph: "↻", tone: "warning" },
     RATE_LIMITED: { label: "Rate Limited", glyph: "!", tone: "warning" },
+    ISSUE_NOT_AVAILABLE: {
+      label: "Issue Not Available",
+      glyph: "?",
+      tone: "warning",
+    },
+    RESPONSE_CHANGED: {
+      label: "Provider Response Changed",
+      glyph: "!",
+      tone: "warning",
+    },
     UNKNOWN: { label: "Unknown", glyph: "?", tone: "unknown" },
+    UNRESOLVED: { label: "Unresolved", glyph: "?", tone: "warning" },
+    WAITING_FOR_AUTHORIZATION: {
+      label: "Authorization Required",
+      glyph: "!",
+      tone: "warning",
+    },
+    LOOKUP_RUNNING: { label: "Lookup Running", glyph: "↻", tone: "info" },
+    INTERACTION_REQUIRED: { label: "Interaction Required", glyph: "!", tone: "warning" },
+    RETRYABLE_PROVIDER_FAILURE: {
+      label: "Retryable Provider Failure",
+      glyph: "↻",
+      tone: "warning",
+    },
+    CONFLICT_REVIEW_REQUIRED: {
+      label: "Conflict Review Required",
+      glyph: "!",
+      tone: "warning",
+    },
+    FINAL_ALLOTTED: { label: "Allotted", glyph: "✓", tone: "positive" },
+    FINAL_NOT_ALLOTTED: { label: "Not Allotted", glyph: "−", tone: "unknown" },
+    MANUAL_CONFIRMED: { label: "Manually Confirmed", glyph: "M", tone: "positive" },
     UNCONFIRMED: { label: "Unconfirmed", glyph: "?", tone: "unknown" },
     PENDING: { label: "Pending", glyph: "○", tone: "info" },
     QUEUED: { label: "Queued", glyph: "○", tone: "info" },
@@ -2875,9 +2909,10 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
   const [lookupConfirmed, setLookupConfirmed] = useState(false);
   const [lookupBusy, setLookupBusy] = useState(false);
   const [manualAccountId, setManualAccountId] = useState("");
-  const [manualResult, setManualResult] = useState("NOT_ALLOTTED");
+  const [manualResult, setManualResult] = useState("");
   const [manualLots, setManualLots] = useState("");
   const [manualShares, setManualShares] = useState("");
+  const [manualOfficialSource, setManualOfficialSource] = useState("");
   const [manualNote, setManualNote] = useState("");
 
   useEffect(() => {
@@ -2937,9 +2972,15 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
   useEffect(() => {
     if (
       !report ||
-      ["COMPLETE", "COMPLETE_WITH_UNCONFIRMED", "NEEDS_HUMAN_VERIFICATION", "CANCELLED"].includes(
-        report.status,
-      )
+      [
+        "COMPLETE",
+        "COMPLETE_WITH_UNCONFIRMED",
+        "NEEDS_HUMAN_VERIFICATION",
+        "INTERACTION_REQUIRED",
+        "UNRESOLVED",
+        "CONFLICT_REVIEW_REQUIRED",
+        "CANCELLED",
+      ].includes(report.status)
     ) {
       setBusy(false);
       return;
@@ -2962,7 +3003,10 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
     if (report?.accounts[0] && !manualAccountId) {
       setManualAccountId(report.accounts[0].account_id);
     }
-  }, [manualAccountId, report]);
+    if (report?.official_status_url && !manualOfficialSource) {
+      setManualOfficialSource(report.official_status_url);
+    }
+  }, [manualAccountId, manualOfficialSource, report]);
 
   async function runCheck() {
     const candidate = candidates.find((c) => c.application_id === selected);
@@ -3024,6 +3068,33 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
   async function saveManualResult(event: FormEvent) {
     event.preventDefault();
     if (!report || !manualAccountId) return;
+    if (!manualResult) {
+      setError("Select a manual result before saving.");
+      return;
+    }
+    const finalResult = manualResult === "ALLOTTED" || manualResult === "NOT_ALLOTTED";
+    const officialSource = manualOfficialSource.trim();
+    if (finalResult && !officialSource) {
+      setError("An official source is required for a final manual result.");
+      return;
+    }
+    const lots = manualLots ? Number(manualLots) : null;
+    const shares = manualShares ? Number(manualShares) : null;
+    if (manualResult === "ALLOTTED") {
+      if (lots === null || shares === null) {
+        setError("An allotted result requires positive lots and shares.");
+        return;
+      }
+      if (
+        !Number.isSafeInteger(lots) ||
+        lots <= 0 ||
+        !Number.isSafeInteger(shares) ||
+        shares <= 0
+      ) {
+        setError("An allotted result requires positive lots and shares.");
+        return;
+      }
+    }
     setError(null);
     try {
       await bridge.invoke("record_manual_allotment", {
@@ -3031,9 +3102,11 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
           job_id: report.job_id,
           account_id: manualAccountId,
           actor_member_id: members[0]?.id ?? "unknown",
-          allotted_lots: manualLots ? Number(manualLots) : null,
-          allotted_shares: manualShares ? Number(manualShares) : null,
+          result: manualResult,
+          allotted_lots: lots,
+          allotted_shares: shares,
           explicit_not_allotted: manualResult === "NOT_ALLOTTED",
+          official_source: officialSource || null,
           note: manualNote || null,
         },
       });
@@ -3358,28 +3431,52 @@ function AllotmentView({ bridge, members }: { bridge: CommandBridge; members: Me
                 </label>
                 <label>
                   Result
-                  <select value={manualResult} onChange={(e) => setManualResult(e.target.value)}>
-                    <option value="NOT_ALLOTTED">Report not allotted</option>
-                    <option value="ALLOTTED">Report allotted</option>
-                    <option value="UNCONFIRMED">Unconfirmed</option>
+                  <select
+                    required
+                    value={manualResult}
+                    onChange={(e) => setManualResult(e.target.value)}
+                  >
+                    <option value="">Select result...</option>
+                    <option value="ALLOTTED">ALLOTTED</option>
+                    <option value="NOT_ALLOTTED">NOT ALLOTTED</option>
+                    <option value="COULD_NOT_VERIFY">COULD NOT VERIFY</option>
                   </select>
                 </label>
-                <label>
-                  Lots
-                  <input
-                    inputMode="numeric"
-                    value={manualLots}
-                    onChange={(e) => setManualLots(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Shares
-                  <input
-                    inputMode="numeric"
-                    value={manualShares}
-                    onChange={(e) => setManualShares(e.target.value)}
-                  />
-                </label>
+                {manualResult === "ALLOTTED" && (
+                  <>
+                    <label>
+                      Lots
+                      <input
+                        inputMode="numeric"
+                        min="1"
+                        required
+                        value={manualLots}
+                        onChange={(e) => setManualLots(e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Shares
+                      <input
+                        inputMode="numeric"
+                        min="1"
+                        required
+                        value={manualShares}
+                        onChange={(e) => setManualShares(e.target.value)}
+                      />
+                    </label>
+                  </>
+                )}
+                {(manualResult === "ALLOTTED" || manualResult === "NOT_ALLOTTED") && (
+                  <label>
+                    Official source
+                    <input
+                      required
+                      type="url"
+                      value={manualOfficialSource}
+                      onChange={(e) => setManualOfficialSource(e.target.value)}
+                    />
+                  </label>
+                )}
                 <label>
                   Note
                   <input value={manualNote} onChange={(e) => setManualNote(e.target.value)} />

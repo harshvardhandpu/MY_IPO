@@ -114,6 +114,10 @@ pub enum EventPayload {
         authorization_id: String,
         application_id: String,
         provider_id: String,
+        #[serde(default)]
+        execution_id: String,
+        #[serde(default)]
+        account_ids: Vec<String>,
         timestamp: String,
     },
     /// Member onboarded. Carries display name only — never PAN/UPI/email.
@@ -234,6 +238,20 @@ pub enum EventPayload {
         last_attempt_at: String,
         next_retry_at: Option<String>,
     },
+    /// A definitive allotment fact, separated from provider-attempt history.
+    /// Contains provenance and account identifiers only; never PAN or secrets.
+    AllotmentResolutionFactRecorded {
+        fact_id: String,
+        job_id: String,
+        account_id: String,
+        outcome: String,
+        source: String,
+        allotted_lots: Option<u32>,
+        allotted_shares: Option<u64>,
+        provider_reference: Option<String>,
+        provenance: String,
+        supersedes_attempt_id: Option<String>,
+    },
     /// Safe durable metadata for resumable human verification. Never session secrets or PAN.
     AllotmentProviderChallengeUpdated {
         challenge_id: String,
@@ -301,6 +319,7 @@ impl EventPayload {
             Self::AllotmentJobStatusChanged { .. } => "ALLOTMENT_JOB_STATUS_CHANGED",
             Self::AllotmentAttemptRecorded { .. } => "ALLOTMENT_ATTEMPT_RECORDED",
             Self::AllotmentAttemptStateUpdated { .. } => "ALLOTMENT_ATTEMPT_STATE_UPDATED",
+            Self::AllotmentResolutionFactRecorded { .. } => "ALLOTMENT_RESOLUTION_FACT_RECORDED",
             Self::AllotmentProviderChallengeUpdated { .. } => {
                 "ALLOTMENT_PROVIDER_CHALLENGE_UPDATED"
             }
@@ -327,6 +346,7 @@ pub struct NewEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventEnvelope {
     schema_version: u16,
+    #[serde(deserialize_with = "deserialize_event_id")]
     event_id: String,
     event_type: String,
     aggregate_type: String,
@@ -345,6 +365,8 @@ pub struct EventEnvelope {
 pub enum EventError {
     #[error("event field {0} cannot be empty")]
     EmptyField(&'static str),
+    #[error("event id is not a path-safe filename: {0}")]
+    UnsafeEventId(String),
     #[error("aggregate revision must be at least one")]
     InvalidRevision,
     #[error("event serialization failed: {0}")]
@@ -376,6 +398,7 @@ impl EventEnvelope {
             event.event_id = uuid::Uuid::now_v7().to_string();
         }
         validate_required("event_id", &event.event_id)?;
+        validate_event_id(&event.event_id)?;
         validate_required("aggregate_type", &event.aggregate_type)?;
         validate_required("aggregate_id", &event.aggregate_id)?;
         validate_required("actor_member_id", &event.actor_member_id)?;
@@ -456,6 +479,26 @@ impl EventEnvelope {
         let bytes = serde_json::to_vec(&hashable)?;
         Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
     }
+}
+
+fn deserialize_event_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let event_id = String::deserialize(deserializer)?;
+    validate_event_id(&event_id).map_err(serde::de::Error::custom)?;
+    Ok(event_id)
+}
+
+fn validate_event_id(event_id: &str) -> Result<(), EventError> {
+    if event_id.is_empty()
+        || !event_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(EventError::UnsafeEventId(event_id.to_owned()));
+    }
+    Ok(())
 }
 
 fn validate_required(field: &'static str, value: &str) -> Result<(), EventError> {

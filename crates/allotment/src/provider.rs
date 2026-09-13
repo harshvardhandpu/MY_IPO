@@ -73,32 +73,54 @@ impl ProviderCapabilities {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderContinuationReference(String);
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("invalid safe provider metadata")]
 pub struct SafeProviderMetadataError;
 
+fn is_safe_continuation_reference(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        && ![
+            "token",
+            "session",
+            "cookie",
+            "bearer",
+            "authorization",
+            "password",
+            "secret",
+            "eyj",
+        ]
+        .iter()
+        .any(|forbidden| normalized.contains(forbidden))
+}
+
 fn is_safe_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b':' || b == b'.')
+}
+
+impl std::fmt::Debug for ProviderContinuationReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProviderContinuationReference([REDACTED])")
+    }
 }
 
 impl ProviderContinuationReference {
     pub fn new(value: impl Into<String>) -> Result<Self, SafeProviderMetadataError> {
         let value = value.into();
-        is_safe_identifier(&value)
+        is_safe_continuation_reference(&value)
             .then_some(Self(value))
             .ok_or(SafeProviderMetadataError)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
@@ -120,7 +142,7 @@ pub enum HumanVerificationStatus {
     Cancelled,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HumanVerificationChallenge {
     challenge_id: String,
     provider_id: String,
@@ -132,6 +154,7 @@ pub struct HumanVerificationChallenge {
     endpoint_id: String,
     created_at: String,
     expires_at: Option<String>,
+    #[serde(skip_serializing)]
     continuation_reference: ProviderContinuationReference,
 }
 
@@ -191,10 +214,6 @@ impl HumanVerificationChallenge {
 
     pub fn expires_at(&self) -> Option<&str> {
         self.expires_at.as_deref()
-    }
-
-    pub fn continuation_reference(&self) -> &str {
-        self.continuation_reference.as_str()
     }
 
     pub fn provider_id(&self) -> &str {
@@ -405,6 +424,80 @@ pub enum ProviderResultProvenance {
     Fixture,
 }
 
+/// Identity selected from a provider's validated issue-discovery response.
+/// Keeping this as a value, rather than a boolean, prevents a positive result
+/// from being constructed without the exact provider/issue binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmedProviderIssue {
+    provider_id: String,
+    provider_issue_id: String,
+    display_name: String,
+    expected_issue_name: String,
+}
+
+impl ConfirmedProviderIssue {
+    pub fn new(
+        provider_id: impl Into<String>,
+        provider_issue_id: impl Into<String>,
+        expected_ipo_name: &str,
+        observed_issue_name: &str,
+    ) -> Result<Self, ProviderError> {
+        let expected_issue_name = normalize_issue_name(expected_ipo_name);
+        let display_name = observed_issue_name.trim().to_owned();
+        let observed_issue_name = normalize_issue_name(&display_name);
+        let identity = Self {
+            provider_id: provider_id.into(),
+            provider_issue_id: provider_issue_id.into(),
+            display_name,
+            expected_issue_name,
+        };
+        if identity.provider_id.trim().is_empty()
+            || identity.provider_issue_id.trim().is_empty()
+            || identity.provider_issue_id.len() > 32
+            || !identity
+                .provider_issue_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+            || identity.display_name.is_empty()
+            || identity.expected_issue_name != observed_issue_name
+        {
+            return Err(ProviderError::IssueNotAvailable);
+        }
+        Ok(identity)
+    }
+
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    pub fn provider_issue_id(&self) -> &str {
+        &self.provider_issue_id
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub fn matches_expected_name(&self, expected_ipo_name: &str) -> bool {
+        self.expected_issue_name == normalize_issue_name(expected_ipo_name)
+            && self.expected_issue_name == normalize_issue_name(&self.display_name)
+    }
+}
+
+fn normalize_issue_name(name: &str) -> String {
+    let normalized = name
+        .trim()
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    normalized
+        .strip_suffix(" ipo")
+        .unwrap_or(&normalized)
+        .to_owned()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NegativeResultProof(());
 
@@ -434,18 +527,25 @@ impl NegativeResultProof {
 }
 
 /// A positively recognized provider allotment is structurally constrained:
-/// it must carry a positive share count and an unambiguous confirmed marker.
+/// it must carry a confirmed provider issue, a positive share count, and an
+/// unambiguous confirmed marker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PositiveResultProof(()); // ponytail: unit proof mirrors NegativeResultProof; add fields if drift demands it
 
 impl PositiveResultProof {
     pub fn new(
-        provider_confirmed: bool,
+        issue: &ConfirmedProviderIssue,
         structure_confirmed: bool,
         allotted_marker_confirmed: bool,
         unambiguous: bool,
     ) -> Result<Self, ProviderError> {
-        if provider_confirmed && structure_confirmed && allotted_marker_confirmed && unambiguous {
+        if !issue.provider_id.is_empty()
+            && !issue.provider_issue_id.is_empty()
+            && !issue.display_name.is_empty()
+            && structure_confirmed
+            && allotted_marker_confirmed
+            && unambiguous
+        {
             Ok(Self(()))
         } else {
             Err(ProviderError::Unknown(
@@ -640,6 +740,10 @@ pub enum ProviderError {
     NeedsHuman(String),
     #[error("retryable: {0}")]
     Retryable(String),
+    #[error("issue not available")]
+    IssueNotAvailable,
+    #[error("provider response changed: {0}")]
+    ResponseChanged(String),
     #[error("parse/layout mismatch: {0}")]
     Unknown(String),
 }
@@ -651,6 +755,8 @@ impl ProviderError {
             Self::RateLimited => NormalizedAllotmentStatus::RateLimited,
             Self::NeedsHuman(_) => NormalizedAllotmentStatus::NeedsHumanVerification,
             Self::Retryable(_) => NormalizedAllotmentStatus::RetryableError,
+            Self::IssueNotAvailable => NormalizedAllotmentStatus::IssueNotAvailable,
+            Self::ResponseChanged(_) => NormalizedAllotmentStatus::ResponseChanged,
             Self::Unknown(_) => NormalizedAllotmentStatus::Unknown,
         }
     }

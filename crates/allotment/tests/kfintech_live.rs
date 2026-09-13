@@ -1,5 +1,6 @@
 use sanket_allotment::{
-    AllotmentLookupContext, AllotmentProvider, KfintechProvider, NormalizedAllotmentStatus,
+    AllotmentLookupContext, AllotmentProvider, ConfirmedProviderIssue, KfintechProvider,
+    NormalizedAllotmentStatus,
     ProviderHealth, ProviderResultProvenance, RegistrarIssue, SanitizedFixtureProvenance,
 };
 use sanket_identity_security::Pan;
@@ -10,15 +11,61 @@ fn parse_case(name: &str) -> String {
     serde_json::to_string(&cases[name]).unwrap()
 }
 
+fn confirmed_issue() -> ConfirmedProviderIssue {
+    ConfirmedProviderIssue::new(
+        "kfintech-live",
+        "90000000001",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap()
+}
+
 fn parse_result(
     body: &str,
 ) -> Result<sanket_allotment::ProviderAllotmentResult, sanket_allotment::ProviderError> {
     KfintechProvider::parse_result_body(
         body,
-        true,
+        Some(&confirmed_issue()),
+        "SYNTHETIC ALPHA LIMITED",
         "2026-08-28T18:09:00Z",
         "kfin-result-data-array-v1",
     )
+}
+
+#[test]
+fn positive_result_without_issue_confirmation_is_unresolved() {
+    let error = KfintechProvider::parse_result_body(
+        &parse_case("allotted"),
+        None,
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-28T18:09:00Z",
+        "kfin-result-data-array-v1",
+    )
+    .expect_err("wrong or unconfirmed issue must not produce allotment");
+    assert_eq!(
+        error.to_status(),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
+    let wrong_provider_issue = ConfirmedProviderIssue::new(
+        "bigshare-live",
+        "90000000001",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap();
+    let wrong_error = KfintechProvider::parse_result_body(
+        &parse_case("allotted"),
+        Some(&wrong_provider_issue),
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-28T18:09:00Z",
+        "kfin-result-data-array-v1",
+    )
+    .expect_err("wrong provider issue must not produce allotment");
+    assert_eq!(
+        wrong_error.to_status(),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
 }
 
 #[test]
@@ -73,7 +120,10 @@ fn rejects_duplicate_issue_ids() {
     ]"#;
     let error = KfintechProvider::parse_issue_bundle(duplicate, "2026-08-28T18:09:00Z")
         .expect_err("duplicate provider issue ids must fail closed");
-    assert_eq!(error.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(
+        error.to_status(),
+        NormalizedAllotmentStatus::ResponseChanged
+    );
 }
 
 #[test]
@@ -114,38 +164,38 @@ fn null_share_count_is_pending_not_allotted() {
 #[test]
 fn unrecognized_wrapper_fails_closed() {
     let err = parse_result(&parse_case("unknown")).expect_err("unknown wrapper must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn plain_text_negative_is_never_not_allotted() {
     let err = parse_result(&parse_case("malformed_zero_text"))
         .expect_err("free text cannot prove a negative result");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn ambiguous_multi_record_fails_closed() {
     let err =
         parse_result(&parse_case("duplicate")).expect_err("multiple result records are ambiguous");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn drifted_wrapper_fails_closed() {
     let err =
         parse_result(&parse_case("changed_wrapper")).expect_err("drifted wrapper must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn non_json_body_fails_closed() {
     let err = parse_result("<html>maintenance</html>").expect_err("non-json must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
 fn empty_body_fails_closed() {
     let err = parse_result("").expect_err("empty body must fail closed");
-    assert_eq!(err.to_status(), NormalizedAllotmentStatus::Unknown);
+    assert_eq!(err.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }

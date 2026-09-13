@@ -67,7 +67,7 @@ fn allotment_fixture_never_persists_plaintext_pan() {
         })
         .unwrap();
 
-    assert_eq!(queued.status, "CREATED");
+    assert_eq!(queued.status, "WAITING_FOR_AUTHORIZATION");
     assert_eq!(queued.accounts.len(), 1);
     assert_eq!(queued.accounts[0].status, "PENDING");
     assert!(!queued.accounts[0].masked_pan.contains("1234"));
@@ -75,7 +75,10 @@ fn allotment_fixture_never_persists_plaintext_pan() {
     let report = app.get_allotment_report(&queued.job_id).unwrap();
 
     assert_eq!(report.accounts.len(), 1);
-    assert_eq!(report.accounts[0].status, "ALLOTTED");
+    assert_eq!(report.accounts[0].status, "UNRESOLVED");
+    assert_eq!(report.accounts[0].resolution_state, "UNRESOLVED");
+    assert_eq!(report.accounts[0].provenance, "UNCONFIRMED_ATTEMPT");
+    assert_eq!(report.final_count, 0);
     assert!(!report.accounts[0].masked_pan.contains("1234"));
 
     let manual_err = app
@@ -83,9 +86,11 @@ fn allotment_fixture_never_persists_plaintext_pan() {
             job_id: queued.job_id.clone(),
             account_id: report.accounts[0].account_id.clone(),
             actor_member_id: member_id.clone(),
+            result: None,
             allotted_lots: None,
             allotted_shares: None,
             explicit_not_allotted: false,
+            official_source: None,
             note: Some(FULL_PAN.into()),
         })
         .expect_err("manual provenance must reject a PAN before persisting");
@@ -96,9 +101,11 @@ fn allotment_fixture_never_persists_plaintext_pan() {
             job_id: queued.job_id.clone(),
             account_id: report.accounts[0].account_id.clone(),
             actor_member_id: "different-member".into(),
+            result: None,
             allotted_lots: None,
             allotted_shares: None,
             explicit_not_allotted: false,
+            official_source: None,
             note: None,
         })
         .expect_err("manual provenance must reject the wrong actor before persisting");
@@ -109,13 +116,16 @@ fn allotment_fixture_never_persists_plaintext_pan() {
             job_id: queued.job_id.clone(),
             account_id: report.accounts[0].account_id.clone(),
             actor_member_id: member_id.clone(),
+            result: Some("NOT_ALLOTTED".into()),
             allotted_lots: None,
             allotted_shares: None,
             explicit_not_allotted: true,
+            official_source: Some("https://ipostatus.kfintech.com/status".into()),
             note: None,
         })
         .expect("authorized manual result should persist");
-    assert_eq!(manual_negative.status, "MANUAL_RESULT");
+    assert_eq!(manual_negative.status, "NOT_ALLOTTED");
+    assert_eq!(manual_negative.resolution_state, "MANUAL_CONFIRMED");
 
     let unsupported_err = app
         .enqueue_allotment_check(StartAllotmentRequest {
@@ -230,7 +240,7 @@ fn bigshare_job_recovers_cancels_and_preserves_manual_provenance_without_pan_acc
         .unwrap();
     assert!(app.run_allotment_job_once(&retried.job_id).unwrap());
     let verification = app.get_allotment_report(&retried.job_id).unwrap();
-    assert_eq!(verification.status, "NEEDS_HUMAN_VERIFICATION");
+    assert_eq!(verification.status, "INTERACTION_REQUIRED");
     assert_eq!(
         verification.accounts[0].human_verification_state.as_deref(),
         Some("REQUIRED")
@@ -250,13 +260,15 @@ fn bigshare_job_recovers_cancels_and_preserves_manual_provenance_without_pan_acc
             job_id: retried.job_id,
             account_id: member_id.clone(),
             actor_member_id: member_id,
+            result: Some("NOT_ALLOTTED".into()),
             allotted_lots: None,
             allotted_shares: None,
             explicit_not_allotted: true,
+            official_source: Some("https://ipo.bigshareonline.com/ipo_status.html".into()),
             note: None,
         })
         .unwrap();
     assert_eq!(manual.source, "MANUAL");
-    assert_eq!(manual.provenance, "OWNER_REPORTED_MANUAL");
+    assert_eq!(manual.provenance, "OFFICIAL_MANUAL_SOURCE");
     let _ = fs::remove_dir_all(root);
 }

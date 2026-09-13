@@ -3386,11 +3386,14 @@ dependencies = [
 name = "sanket-member-vault"
 version = "0.1.1"
 dependencies = [
+ "hmac",
+ "libc",
  "sanket-domain",
  "sanket-identity-security",
  "sanket-intelligence-vault",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
 ]
 

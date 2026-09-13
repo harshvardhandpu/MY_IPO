@@ -1,12 +1,24 @@
 use sanket_allotment::{
-    AllotmentCheckAttempt, AllotmentCheckJob, AllotmentJobStatus, AllotmentProvider, AttemptStatus,
-    BackgroundExecution, BigshareProvider, FixtureKfintechProvider, HumanVerificationChallenge,
-    HumanVerificationRequirement, HumanVerificationStatus, HumanVerificationType,
-    IssueDiscoveryMode, KfintechProvider, LookupKeyKind, ManualReportedOutcome, ManualResultInput,
-    MufgIntimeProvider, NegativeResultProof, NormalizedAllotmentStatus,
-    ProviderContinuationReference, ProviderId, ProviderRegistry, ProviderResultProvenance,
-    ProviderTransportKind, SanitizedFixtureProvenance, SessionRequirement,
+    AllotmentCheckAttempt, AllotmentCheckJob, AllotmentJobStatus, AllotmentProvider,
+    AllotmentResolutionState, AttemptStatus, BackgroundExecution, BigshareProvider,
+    ConfirmedProviderIssue, FixtureKfintechProvider, HumanVerificationChallenge, HumanVerificationRequirement,
+    HumanVerificationStatus, HumanVerificationType, IssueDiscoveryMode, KfintechProvider,
+    LookupKeyKind, ManualReportedOutcome, ManualResultInput, MufgIntimeProvider,
+    NegativeResultProof, NormalizedAllotmentStatus, PositiveResultProof,
+    ProviderContinuationReference, ProviderId,
+    ProviderRegistry, ProviderResultProvenance, ProviderTransportKind, SanitizedFixtureProvenance,
+    SessionRequirement,
 };
+
+fn confirmed_issue(provider_id: &str) -> ConfirmedProviderIssue {
+    ConfirmedProviderIssue::new(
+        provider_id,
+        "11927",
+        "SYNTHETIC ALPHA LIMITED",
+        "SYNTHETIC ALPHA LIMITED",
+    )
+    .unwrap()
+}
 
 #[test]
 fn registry_alias_resolution_is_unified_and_fails_closed() {
@@ -124,6 +136,34 @@ fn not_allotted_requires_all_five_negative_proof_facts() {
     assert_eq!(
         result.provenance(),
         ProviderResultProvenance::ConfirmedProviderResponse
+    );
+}
+
+#[test]
+fn positive_proof_requires_confirmed_issue_identity() {
+    let issue = ConfirmedProviderIssue::new(
+        "kfintech-live",
+        "11927",
+        "Symbiotec Pharmalab Limited - IPO",
+        "Symbiotec Pharmalab Limited - IPO",
+    )
+    .unwrap();
+    assert!(PositiveResultProof::new(&issue, true, true, true).is_ok());
+    assert!(ConfirmedProviderIssue::new(
+        "mufg-intime-live",
+        "11927",
+        "Symbiotec Pharmalab Limited - IPO",
+        "Symbiotec Pharmalab Limited",
+    )
+    .is_ok());
+    assert!(
+        ConfirmedProviderIssue::new(
+            "kfintech-live",
+            "11927",
+            "Symbiotec Pharmalab Limited - IPO",
+            "Wrong issue - IPO",
+        )
+        .is_err()
     );
 }
 
@@ -248,6 +288,11 @@ fn challenge_is_safe_metadata_and_job_can_refresh_after_restart() {
     ] {
         assert!(!json.to_ascii_lowercase().contains(forbidden));
     }
+    assert!(!json.contains("continuation-1"));
+    assert!(format!("{:?}", challenge).contains("[REDACTED]"));
+    assert!(ProviderContinuationReference::new("session-token-abc").is_err());
+    assert!(ProviderContinuationReference::new("eyJhbGciOiJIUzI1NiJ9").is_err());
+    assert!(ProviderContinuationReference::new("continuation_2").is_ok());
 
     let mut job = AllotmentCheckJob::create(
         "job-1",
@@ -334,12 +379,98 @@ fn mixed_account_states_are_partially_complete_without_hiding_finals() {
             AttemptStatus::NotFound,
             AttemptStatus::ManualResult,
         ]),
-        AllotmentJobStatus::Complete
+        AllotmentJobStatus::PartiallyComplete
     );
     assert_eq!(
         AllotmentJobStatus::from_attempt_statuses(&[AttemptStatus::NeedsHumanVerification]),
         AllotmentJobStatus::PartiallyComplete
     );
+}
+
+#[test]
+fn resolution_state_keeps_operational_failures_and_unknowns_unresolved() {
+    assert_eq!(
+        AllotmentResolutionState::from_attempt_status("PROVIDER_UNAVAILABLE", true, false),
+        AllotmentResolutionState::RetryableProviderFailure
+    );
+    assert_eq!(
+        AllotmentResolutionState::from_attempt_status("PROVIDER_UNAVAILABLE", false, false),
+        AllotmentResolutionState::Unresolved
+    );
+    assert_eq!(
+        AllotmentResolutionState::from_attempt_status("NOT_FOUND", false, false),
+        AllotmentResolutionState::Unresolved
+    );
+    for status in ["UNKNOWN", "ISSUE_NOT_AVAILABLE", "RESPONSE_CHANGED"] {
+        assert_eq!(
+            AllotmentResolutionState::from_attempt_status(status, false, false),
+            AllotmentResolutionState::Unresolved,
+            "{status} must remain unresolved"
+        );
+    }
+    assert_eq!(
+        AllotmentResolutionState::from_attempt_status("NEEDS_HUMAN_VERIFICATION", false, false),
+        AllotmentResolutionState::InteractionRequired
+    );
+    assert_eq!(
+        AllotmentResolutionState::from_attempt_status("MANUAL_RESULT", false, true),
+        AllotmentResolutionState::ManualConfirmed
+    );
+}
+
+#[test]
+fn issue_unavailable_and_response_change_are_distinct_unresolved_outcomes() {
+    assert_eq!(
+        NormalizedAllotmentStatus::from_provider_text("requested issue not available"),
+        NormalizedAllotmentStatus::IssueNotAvailable
+    );
+    assert_eq!(
+        NormalizedAllotmentStatus::from_provider_text("provider response changed"),
+        NormalizedAllotmentStatus::ResponseChanged
+    );
+    assert!(!NormalizedAllotmentStatus::IssueNotAvailable.is_final());
+    assert!(!NormalizedAllotmentStatus::ResponseChanged.is_final());
+}
+
+#[test]
+fn every_provider_rejects_a_stale_result_contract_as_response_changed() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/kfintech/cases.json")).unwrap();
+    let kfintech = KfintechProvider::parse_result_body(
+        &cases["allotted"].to_string(),
+        Some(&confirmed_issue("kfintech-live")),
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-29T12:00:00Z",
+        "stale-contract",
+    )
+    .expect_err("stale KFintech contract");
+    assert_eq!(
+        kfintech.to_status(),
+        NormalizedAllotmentStatus::ResponseChanged
+    );
+
+    let bigshare = BigshareProvider::parse_result_body(
+        r#"{"d":{"Status":"NOTFOUND"}}"#,
+        Some(&confirmed_issue("bigshare-live")),
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-29T12:00:00Z",
+        "stale-contract",
+    )
+    .expect_err("stale Bigshare contract");
+    assert_eq!(
+        bigshare.to_status(),
+        NormalizedAllotmentStatus::ResponseChanged
+    );
+
+    let mufg = MufgIntimeProvider::parse_result_body(
+        "{}",
+        Some(&confirmed_issue("mufg-intime-live")),
+        "SYNTHETIC ALPHA LIMITED",
+        "2026-08-29T12:00:00Z",
+        "stale-contract",
+    )
+    .expect_err("stale MUFG contract");
+    assert_eq!(mufg.to_status(), NormalizedAllotmentStatus::ResponseChanged);
 }
 
 #[test]
@@ -354,21 +485,24 @@ fn confirmed_results_have_cross_provider_application_semantics() {
     let results = [
         KfintechProvider::parse_result_body(
             &kfin_cases["allotted"].to_string(),
-            true,
+            Some(&confirmed_issue("kfintech-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "kfin-result-data-array-v1",
         )
         .unwrap(),
         BigshareProvider::parse_result_body(
             &bigshare_cases["ok_allotted"].to_string(),
-            true,
+            Some(&confirmed_issue("bigshare-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "bigshare-result-d-status-v1",
         )
         .unwrap(),
         MufgIntimeProvider::parse_result_body(
             &mufg_cases["allotted"].to_string(),
-            true,
+            Some(&confirmed_issue("mufg-intime-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "mufg-result-d-xml-table-v1",
         )
@@ -401,21 +535,24 @@ fn only_confirmed_provider_negatives_normalize_to_not_allotted() {
     let negatives = [
         KfintechProvider::parse_result_body(
             &kfin_cases["not_allotted"].to_string(),
-            true,
+            Some(&confirmed_issue("kfintech-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "kfin-result-data-array-v1",
         )
         .unwrap(),
         BigshareProvider::parse_result_body(
             &bigshare_cases["ok_not_allotted"].to_string(),
-            true,
+            Some(&confirmed_issue("bigshare-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "bigshare-result-d-status-v1",
         )
         .unwrap(),
         MufgIntimeProvider::parse_result_body(
             &mufg_cases["not_allotted"].to_string(),
-            true,
+            Some(&confirmed_issue("mufg-intime-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "mufg-result-d-xml-table-v1",
         )
@@ -430,7 +567,8 @@ fn only_confirmed_provider_negatives_normalize_to_not_allotted() {
     assert_eq!(
         BigshareProvider::parse_result_body(
             &bigshare_cases["notfound"].to_string(),
-            true,
+            Some(&confirmed_issue("bigshare-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "bigshare-result-d-status-v1",
         )
@@ -441,7 +579,8 @@ fn only_confirmed_provider_negatives_normalize_to_not_allotted() {
     assert_eq!(
         MufgIntimeProvider::parse_result_body(
             &mufg_cases["not_found"].to_string(),
-            true,
+            Some(&confirmed_issue("mufg-intime-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "mufg-result-d-xml-table-v1",
         )
@@ -452,10 +591,11 @@ fn only_confirmed_provider_negatives_normalize_to_not_allotted() {
     assert!(matches!(
         KfintechProvider::parse_result_body(
             &kfin_cases["unknown"].to_string(),
-            true,
+            Some(&confirmed_issue("kfintech-live")),
+        "SYNTHETIC ALPHA LIMITED",
             "2026-08-29T12:00:00Z",
             "kfin-result-data-array-v1",
         ),
-        Err(sanket_allotment::ProviderError::Unknown(_))
+        Err(sanket_allotment::ProviderError::ResponseChanged(_))
     ));
 }

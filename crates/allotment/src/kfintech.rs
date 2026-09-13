@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use sanket_identity_security::Pan;
 
 use crate::provider::{
-    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, HumanVerificationRequirement,
-    IssueDiscoveryMode, LookupKeyKind, NegativeResultProof, PositiveResultProof,
+    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, ConfirmedProviderIssue,
+    HumanVerificationRequirement, IssueDiscoveryMode, LookupKeyKind, NegativeResultProof,
+    PositiveResultProof,
     ProviderAllotmentResult, ProviderCapabilities, ProviderError, ProviderHealth,
     ProviderTransportKind, RegistrarIssue, SessionRequirement,
 };
@@ -78,7 +79,7 @@ impl KfintechProvider {
                     .iter()
                     .any(|issue: &KfintechIssue| issue.provider_issue_id == provider_issue_id)
             {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "kfintech issue bundle failed structural validation".into(),
                 ));
             }
@@ -91,7 +92,7 @@ impl KfintechProvider {
             });
         }
         if issues.is_empty() {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "kfintech issue bundle contained no recognized records".into(),
             ));
         }
@@ -100,32 +101,36 @@ impl KfintechProvider {
 
     pub fn parse_result_body(
         body: &str,
-        issue_confirmed: bool,
+        issue: Option<&ConfirmedProviderIssue>,
+        expected_ipo_name: &str,
         checked_at: &str,
         contract_fingerprint: &str,
     ) -> Result<ProviderAllotmentResult, ProviderError> {
         if contract_fingerprint != RESULT_FINGERPRINT {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "kfintech result fingerprint is not accepted".into(),
             ));
         }
 
-        let document: serde_json::Value = serde_json::from_str(body)
-            .map_err(|_| ProviderError::Unknown("kfintech result was not valid JSON".into()))?;
+        let document: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+            ProviderError::ResponseChanged("kfintech result was not valid JSON".into())
+        })?;
         let records = document
             .as_object()
             .and_then(|object| object.get("data"))
             .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| ProviderError::Unknown("kfintech result wrapper changed".into()))?;
+            .ok_or_else(|| {
+                ProviderError::ResponseChanged("kfintech result wrapper changed".into())
+            })?;
         if records.len() != 1 {
-            return Err(ProviderError::Unknown(
+            return Err(ProviderError::ResponseChanged(
                 "kfintech result was empty or ambiguous".into(),
             ));
         }
 
-        let record = records[0]
-            .as_object()
-            .ok_or_else(|| ProviderError::Unknown("kfintech result record changed".into()))?;
+        let record = records[0].as_object().ok_or_else(|| {
+            ProviderError::ResponseChanged("kfintech result record changed".into())
+        })?;
         for field in [
             "Appln_No",
             "Name",
@@ -135,7 +140,7 @@ impl KfintechProvider {
             "All_Shares",
         ] {
             if !record.contains_key(field) {
-                return Err(ProviderError::Unknown(
+                return Err(ProviderError::ResponseChanged(
                     "kfintech result record is incomplete".into(),
                 ));
             }
@@ -156,9 +161,14 @@ impl KfintechProvider {
             .get("All_Shares")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| {
-                ProviderError::Unknown("kfintech allotted shares were not numeric".into())
+                ProviderError::ResponseChanged("kfintech allotted shares were not numeric".into())
             })?;
 
+        let issue = issue.filter(|identity| {
+            identity.provider_id() == "kfintech-live"
+                && identity.matches_expected_name(expected_ipo_name)
+        });
+        let issue_confirmed = issue.is_some();
         if allotted_shares == 0 {
             let proof = NegativeResultProof::new(true, issue_confirmed, true, true, true)
                 .map_err(|_| ProviderError::Unknown("kfintech negative proof failed".into()))?;
@@ -168,7 +178,10 @@ impl KfintechProvider {
                 contract_fingerprint,
             ))
         } else {
-            let proof = PositiveResultProof::new(true, true, true, true)?;
+            let issue = issue
+                .filter(|identity| identity.provider_id() == "kfintech-live")
+                .ok_or(ProviderError::IssueNotAvailable)?;
+            let proof = PositiveResultProof::new(issue, true, true, true)?;
             ProviderAllotmentResult::confirmed_allotted(
                 proof,
                 allotted_shares,

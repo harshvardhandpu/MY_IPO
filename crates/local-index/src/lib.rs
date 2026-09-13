@@ -1,10 +1,40 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
+#[cfg(test)]
+use std::sync::{Arc, atomic::AtomicBool};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
 use sanket_domain::EventEnvelope;
+
+fn valid_manual_official_source(source: &str) -> bool {
+    let source = source.trim();
+    if !source.starts_with("https://")
+        || source.contains('@')
+        || source.chars().any(char::is_control)
+    {
+        return false;
+    }
+    let host = source
+        .strip_prefix("https://")
+        .and_then(|value| value.split('/').next())
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    [
+        "bseindia.com",
+        "nseindia.com",
+        "kfintech.com",
+        "bigshareonline.com",
+        "mufg.com",
+        "upstox.com",
+    ]
+    .iter()
+    .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -209,8 +239,57 @@ INSERT OR IGNORE INTO schema_migrations(version) VALUES (8);
 COMMIT;
 "#;
 
+// Schema v9: append-only provider-attempt history and a separate current
+// resolved-fact projection. Neither table stores PAN or provider credentials.
+const SCHEMA_V9: &str = r#"
+BEGIN;
+CREATE TABLE IF NOT EXISTS allotment_provider_attempts (
+    event_id TEXT PRIMARY KEY,
+    attempt_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    allotted_lots INTEGER,
+    allotted_shares INTEGER,
+    provider_reference TEXT,
+    safe_message TEXT,
+    source TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    next_retry_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_provider_attempts_job_account
+    ON allotment_provider_attempts(job_id, account_id, observed_at, event_id);
+
+CREATE TABLE IF NOT EXISTS allotment_resolved_facts (
+    job_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    fact_id TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    source TEXT NOT NULL,
+    allotted_lots INTEGER,
+    allotted_shares INTEGER,
+    provider_reference TEXT,
+    provenance TEXT NOT NULL,
+    supersedes_attempt_id TEXT,
+    resolved_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'RESOLVED',
+    conflicting_outcome TEXT,
+    conflicting_source TEXT,
+    conflicting_provenance TEXT,
+    conflicting_allotted_lots INTEGER,
+    conflicting_allotted_shares INTEGER,
+    PRIMARY KEY(job_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resolved_facts_job ON allotment_resolved_facts(job_id);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (9);
+COMMIT;
+"#;
+
 pub struct LocalIndex {
     connection: Connection,
+    #[cfg(test)]
+    fail_after_projection_insert: Arc<AtomicBool>,
 }
 
 pub type FriendProjectionRow = (String, String, String, String, i64);
@@ -228,6 +307,18 @@ pub struct SubmittedApplicationState {
     pub official_status_url: Option<String>,
     pub expected_allotment_date: Option<String>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderIssueMappingState {
+    pub application_id: String,
+    pub provider_id: String,
+    pub registrar_id: String,
+    pub provider_issue_id: String,
+    pub ipo_name: String,
+    pub official_status_url: String,
+    pub last_verified_at: String,
+}
+
 pub type AllotmentJobRow = (String, String, String, String, String, String);
 pub type AllotmentAttemptRow = (String, String, String, Option<i64>, Option<i64>, String);
 pub type EstimatedProfitBase = (String, Option<i64>, Option<String>);
@@ -264,6 +355,44 @@ pub struct AllotmentAttemptState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderAttemptHistoryState {
+    pub event_id: String,
+    pub attempt_id: String,
+    pub job_id: String,
+    pub account_id: String,
+    pub status: String,
+    pub attempt_count: u32,
+    pub allotted_lots: Option<i64>,
+    pub allotted_shares: Option<i64>,
+    pub provider_reference: Option<String>,
+    pub safe_message: Option<String>,
+    pub source: String,
+    pub observed_at: String,
+    pub next_retry_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedAllotmentFactState {
+    pub job_id: String,
+    pub account_id: String,
+    pub fact_id: String,
+    pub outcome: String,
+    pub source: String,
+    pub allotted_lots: Option<i64>,
+    pub allotted_shares: Option<i64>,
+    pub provider_reference: Option<String>,
+    pub provenance: String,
+    pub supersedes_attempt_id: Option<String>,
+    pub resolved_at: String,
+    pub state: String,
+    pub conflicting_outcome: Option<String>,
+    pub conflicting_source: Option<String>,
+    pub conflicting_provenance: Option<String>,
+    pub conflicting_allotted_lots: Option<i64>,
+    pub conflicting_allotted_shares: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderChallengeState {
     pub id: String,
     pub job_id: String,
@@ -292,6 +421,8 @@ pub enum LocalIndexError {
     Metadata(String),
     #[error("unsupported event payload for projection: {0}")]
     UnsupportedEvent(String),
+    #[error("event integrity check failed for projection: {0}")]
+    EventIntegrity(String),
 }
 
 impl LocalIndex {
@@ -347,7 +478,24 @@ impl LocalIndex {
         if version < 8 {
             connection.execute_batch(SCHEMA_V8)?;
         }
-        Ok(Self { connection })
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if version < 9 {
+            connection.execute_batch(SCHEMA_V9)?;
+        }
+        connection.execute(
+            "UPDATE allotment_jobs SET status='UNRESOLVED'
+             WHERE status='COMPLETE_WITH_UNCONFIRMED'",
+            [],
+        )?;
+        Ok(Self {
+            connection,
+            #[cfg(test)]
+            fail_after_projection_insert: Arc::new(AtomicBool::new(false)),
+        })
     }
 
     pub fn schema_version(&self) -> Result<u32, LocalIndexError> {
@@ -357,6 +505,26 @@ impl LocalIndex {
             |row| row.get(0),
         )?;
         Ok(version)
+    }
+
+    pub fn projection_event_hash(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<String>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT content_hash FROM projection_events WHERE event_id=?1",
+                [event_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    pub fn fail_next_event_application(&self) {
+        self.fail_after_projection_insert
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn has_table(&self, table: &str) -> Result<bool, LocalIndexError> {
@@ -433,6 +601,17 @@ impl LocalIndex {
         Ok(())
     }
 
+    pub fn friend_owner(&self, id: &str) -> Result<Option<String>, LocalIndexError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT owner_member_id FROM friend_accounts WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn list_members(&self) -> Result<Vec<(String, String, String, String)>, LocalIndexError> {
         let mut stmt = self
             .connection
@@ -470,18 +649,46 @@ impl LocalIndex {
 
     // --- event replay / projection ---
 
-    /// Replay a domain event into the materialized projection, idempotently.
+    /// Replay a domain event into the materialized projection, idempotently and atomically.
     pub fn apply_event(&self, event: &EventEnvelope) -> Result<(), LocalIndexError> {
-        // Idempotency: skip already-applied events.
-        let already: Option<u8> = self
+        if !event.verify_integrity()? {
+            return Err(LocalIndexError::EventIntegrity(event.event_id().to_owned()));
+        }
+        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.apply_event_unchecked(event);
+        match result {
+            Ok(()) => self.connection.execute_batch("COMMIT").map_err(Into::into),
+            Err(error) => {
+                let _ = self.connection.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    /// Replay all authoritative events that are not already represented in the projection.
+    pub fn replay_events(&self, events: &[EventEnvelope]) -> Result<(), LocalIndexError> {
+        for event in events {
+            self.apply_event(event)?;
+        }
+        Ok(())
+    }
+
+    fn apply_event_unchecked(&self, event: &EventEnvelope) -> Result<(), LocalIndexError> {
+        let already: Option<String> = self
             .connection
             .query_row(
-                "SELECT 1 FROM projection_events WHERE event_id = ?1",
+                "SELECT content_hash FROM projection_events WHERE event_id = ?1",
                 [event.event_id()],
                 |row| row.get(0),
             )
             .optional()?;
-        if already.is_some() {
+        if let Some(existing_hash) = already {
+            if existing_hash != event.content_hash() {
+                return Err(LocalIndexError::UnsupportedEvent(format!(
+                    "projection event hash mismatch for {}",
+                    event.event_id()
+                )));
+            }
             return Ok(());
         }
 
@@ -489,6 +696,15 @@ impl LocalIndex {
             "INSERT INTO projection_events(event_id, content_hash) VALUES (?1, ?2)",
             params![event.event_id(), event.content_hash()],
         )?;
+        #[cfg(test)]
+        if self
+            .fail_after_projection_insert
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(LocalIndexError::UnsupportedEvent(
+                "test projection failure".into(),
+            ));
+        }
 
         match event.payload() {
             sanket_domain::EventPayload::MemberCreated {
@@ -523,7 +739,16 @@ impl LocalIndex {
                     params![friend_id, owner_member_id, label, share_basis_points],
                 )?;
             }
-            sanket_domain::EventPayload::FriendArchived { friend_id, .. } => {
+            sanket_domain::EventPayload::FriendArchived {
+                friend_id,
+                owner_member_id,
+            } => {
+                let actual_owner = self.friend_owner(friend_id)?;
+                if actual_owner.as_deref() != Some(owner_member_id.as_str()) {
+                    return Err(LocalIndexError::UnsupportedEvent(format!(
+                        "friend archive owner mismatch for {friend_id}"
+                    )));
+                }
                 self.archive_friend(friend_id)?;
             }
             sanket_domain::EventPayload::InvestmentSessionCreated {
@@ -627,8 +852,7 @@ impl LocalIndex {
                 session_id,
                 algorithm_version,
             } => {
-                use uuid::Uuid;
-                let rec_id = Uuid::now_v7().to_string();
+                let rec_id = event.event_id().to_owned();
                 self.connection.execute(
                     "INSERT INTO recommendations(session_id, algorithm_version, recommendation_id) VALUES (?1, ?2, ?3)",
                     params![session_id, algorithm_version, rec_id],
@@ -649,7 +873,11 @@ impl LocalIndex {
                         id, application_id, session_id, ipo_name, registrar_id, registrar_name,
                         official_status_url, provider_id, status, actor_member_id, created_at, updated_at
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'CREATED', ?9, ?10, ?10)
-                     ON CONFLICT(id) DO UPDATE SET status=excluded.status",
+                     ON CONFLICT(id) DO UPDATE SET
+                        status=CASE WHEN allotment_jobs.status='CANCELLED'
+                                    THEN allotment_jobs.status ELSE excluded.status END,
+                        cancel_requested=CASE WHEN allotment_jobs.status='CANCELLED'
+                                              THEN 1 ELSE allotment_jobs.cancel_requested END",
                     params![
                         job_id,
                         application_id,
@@ -665,10 +893,34 @@ impl LocalIndex {
                 )?;
             }
             sanket_domain::EventPayload::AllotmentJobStatusChanged { job_id, status } => {
-                self.connection.execute(
-                    "UPDATE allotment_jobs SET status=?2 WHERE id=?1",
-                    params![job_id, status],
-                )?;
+                let normalized_status = if status == "COMPLETE_WITH_UNCONFIRMED" {
+                    "UNRESOLVED"
+                } else {
+                    status.as_str()
+                };
+                if normalized_status == "CANCELLED" {
+                    let cancelled = self.connection.execute(
+                        "UPDATE allotment_jobs
+                         SET status='CANCELLED', cancel_requested=1, updated_at=?2
+                         WHERE id=?1 AND status NOT IN ('COMPLETE', 'CANCELLED')",
+                        params![job_id, event.occurred_at()],
+                    )? > 0;
+                    if cancelled {
+                        self.connection.execute(
+                            "UPDATE allotment_attempts
+                             SET status='CANCELLED', next_retry_at=NULL
+                             WHERE job_id=?1 AND status NOT IN ('COMPLETE', 'CANCELLED')",
+                            [job_id],
+                        )?;
+
+                    }
+                } else {
+                    self.connection.execute(
+                        "UPDATE allotment_jobs SET status=?2, updated_at=?3
+                         WHERE id=?1 AND status <> 'CANCELLED' AND cancel_requested=0",
+                        params![job_id, normalized_status, event.occurred_at()],
+                    )?;
+                }
             }
             sanket_domain::EventPayload::AllotmentAttemptRecorded {
                 attempt_id,
@@ -684,14 +936,22 @@ impl LocalIndex {
                     "INSERT INTO allotment_attempts(
                         id, job_id, account_id, status, attempt_count, allotted_lots, allotted_shares,
                         provider_reference, source
-                     ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)
+                     ) SELECT ?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8
+                     WHERE EXISTS (
+                         SELECT 1 FROM allotment_jobs
+                         WHERE id=?2 AND cancel_requested=0 AND status <> 'CANCELLED'
+                     )
                      ON CONFLICT(id) DO UPDATE SET
                         status=excluded.status,
                         allotted_lots=excluded.allotted_lots,
                         allotted_shares=excluded.allotted_shares,
                         provider_reference=excluded.provider_reference,
                         source=excluded.source,
-                        attempt_count=allotment_attempts.attempt_count + 1",
+                        attempt_count=allotment_attempts.attempt_count + 1
+                     WHERE EXISTS (
+                         SELECT 1 FROM allotment_jobs
+                         WHERE id=?2 AND cancel_requested=0 AND status <> 'CANCELLED'
+                     )",
                     params![
                         attempt_id,
                         job_id,
@@ -701,6 +961,25 @@ impl LocalIndex {
                         allotted_shares.map(|v| v as i64),
                         provider_reference,
                         source
+                    ],
+                )?;
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO allotment_provider_attempts(
+                        event_id, attempt_id, job_id, account_id, status, attempt_count,
+                        allotted_lots, allotted_shares, provider_reference, safe_message,
+                        source, observed_at, next_retry_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, NULL, ?9, ?10, NULL)",
+                    params![
+                        event.event_id(),
+                        attempt_id,
+                        job_id,
+                        account_id,
+                        status,
+                        allotted_lots.map(|v| v as i64),
+                        allotted_shares.map(|v| v as i64),
+                        provider_reference,
+                        source,
+                        event.occurred_at()
                     ],
                 )?;
             }
@@ -723,7 +1002,11 @@ impl LocalIndex {
                         id, job_id, account_id, status, attempt_count, allotted_lots,
                         allotted_shares, provider_reference, safe_message, source,
                         last_attempt_at, next_retry_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                     ) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+                     WHERE EXISTS (
+                         SELECT 1 FROM allotment_jobs
+                         WHERE id=?2 AND cancel_requested=0 AND status <> 'CANCELLED'
+                     )
                      ON CONFLICT(id) DO UPDATE SET
                         status=excluded.status,
                         attempt_count=excluded.attempt_count,
@@ -733,7 +1016,11 @@ impl LocalIndex {
                         safe_message=excluded.safe_message,
                         source=excluded.source,
                         last_attempt_at=excluded.last_attempt_at,
-                        next_retry_at=excluded.next_retry_at",
+                        next_retry_at=excluded.next_retry_at
+                     WHERE EXISTS (
+                         SELECT 1 FROM allotment_jobs
+                         WHERE id=?2 AND cancel_requested=0 AND status <> 'CANCELLED'
+                     )",
                     params![
                         attempt_id,
                         job_id,
@@ -749,6 +1036,247 @@ impl LocalIndex {
                         next_retry_at
                     ],
                 )?;
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO allotment_provider_attempts(
+                        event_id, attempt_id, job_id, account_id, status, attempt_count,
+                        allotted_lots, allotted_shares, provider_reference, safe_message,
+                        source, observed_at, next_retry_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    params![
+                        event.event_id(),
+                        attempt_id,
+                        job_id,
+                        account_id,
+                        status,
+                        *attempt_count as i64,
+                        allotted_lots.map(|v| v as i64),
+                        allotted_shares.map(|v| v as i64),
+                        provider_reference,
+                        safe_message,
+                        source,
+                        event.occurred_at(),
+                        next_retry_at
+                    ],
+                )?;
+            }
+            sanket_domain::EventPayload::AllotmentResolutionFactRecorded {
+                fact_id,
+                job_id,
+                account_id,
+                outcome,
+                source,
+                allotted_lots,
+                allotted_shares,
+                provider_reference,
+                provenance,
+                supersedes_attempt_id,
+            } => {
+                let job_state: Option<(String, i64, String)> = self
+                    .connection
+                    .query_row(
+                        "SELECT provider_id, cancel_requested, status
+                         FROM allotment_jobs WHERE id=?1",
+                        [job_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                let Some((job_provider_id, cancel_requested, job_status)) = job_state else {
+                    return Ok(());
+                };
+                if cancel_requested != 0 || job_status == "CANCELLED" {
+                    return Ok(());
+                }
+                let Some(supersedes_attempt_id) = supersedes_attempt_id.as_deref() else {
+                    return Ok(());
+                };
+                let expected_lots = allotted_lots.map(i64::from);
+                let expected_shares = allotted_shares.and_then(|value| i64::try_from(value).ok());
+                let linked_source: Option<String> = self
+                    .connection
+                    .query_row(
+                        "SELECT source
+                         FROM allotment_provider_attempts
+                         WHERE attempt_id=?1 AND job_id=?2 AND account_id=?3
+                           AND status=?4
+                           AND allotted_lots IS ?5
+                           AND allotted_shares IS ?6
+                           AND provider_reference IS ?7
+                         ORDER BY event_id DESC LIMIT 1",
+                        params![
+                            supersedes_attempt_id,
+                            job_id,
+                            account_id,
+                            outcome,
+                            expected_lots,
+                            expected_shares,
+                            provider_reference,
+                        ],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let Some(linked_source) = linked_source else {
+                    return Ok(());
+                };
+                let source_matches = match source.as_str() {
+                    "MANUAL" => linked_source == "MANUAL",
+                    "FIXTURE" => matches!(linked_source.as_str(), "FIXTURE" | "AUTOMATED"),
+                    "AUTOMATED_PROVIDER" => linked_source == "AUTOMATED_PROVIDER",
+                    _ => false,
+                };
+                if !source_matches {
+                    return Ok(());
+                }
+                if source == "AUTOMATED_PROVIDER" {
+                    let mapping_exists: bool = self
+                        .connection
+                        .query_row(
+                            "SELECT EXISTS(
+                                 SELECT 1
+                                 FROM allotment_jobs j
+                                 JOIN provider_issue_mappings p
+                                   ON p.application_id=j.application_id
+                                  AND p.provider_id=j.provider_id
+                                 WHERE j.id=?1 AND j.provider_id=?2
+                             )",
+                            params![job_id, job_provider_id],
+                            |row| row.get::<_, i64>(0),
+                        )?
+                        != 0;
+                    if !mapping_exists {
+                        return Ok(());
+                    }
+                }
+                let outcome_authoritative = match outcome.as_str() {
+                    "ALLOTTED" => {
+                        allotted_lots
+                            .map(|value| value > 0)
+                            .unwrap_or(false)
+                            || allotted_shares
+                                .map(|value| value > 0)
+                                .unwrap_or(false)
+                    }
+                    "NOT_ALLOTTED" => allotted_lots.is_none() && allotted_shares.is_none(),
+                    _ => false,
+                };
+                let source_authoritative = match source.as_str() {
+                    "MANUAL" => {
+                        provenance == "OFFICIAL_MANUAL_SOURCE"
+                            && provider_reference
+                                .as_ref()
+                                .is_some_and(|value| valid_manual_official_source(value))
+                    }
+                    "FIXTURE" => {
+                        job_provider_id.ends_with("-fixture")
+                            && provenance == "CONFIRMED_PROVIDER_RESPONSE"
+                    }
+                    "AUTOMATED_PROVIDER" => {
+                        matches!(
+                            job_provider_id.as_str(),
+                            "kfintech-live" | "bigshare-live" | "mufg-intime-live"
+                        ) && provenance == "CONFIRMED_PROVIDER_RESPONSE"
+                    }
+                    _ => false,
+                };
+                if !outcome_authoritative || !source_authoritative {
+                    return Ok(());
+                }
+                let existing: Option<(String, String, Option<i64>, Option<i64>)> = self
+                    .connection
+                    .query_row(
+                        "SELECT outcome, state, allotted_lots, allotted_shares
+                         FROM allotment_resolved_facts
+                         WHERE job_id=?1 AND account_id=?2",
+                        params![job_id, account_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .optional()?;
+                if let Some((existing_outcome, existing_state, existing_lots, existing_shares)) =
+                    existing
+                {
+                    let conflicting_lots = existing_lots
+                        .zip(allotted_lots.map(|value| value as i64))
+                        .is_some_and(|(existing, incoming)| existing != incoming);
+                    let conflicting_shares = existing_shares
+                        .zip(allotted_shares.map(|value| value as i64))
+                        .is_some_and(|(existing, incoming)| existing != incoming);
+                    if (existing_outcome != *outcome || conflicting_lots || conflicting_shares)
+                        && existing_state != "CONFLICT_REVIEW_REQUIRED"
+                    {
+                        self.connection.execute(
+                            "UPDATE allotment_resolved_facts SET state='CONFLICT_REVIEW_REQUIRED',
+                                conflicting_outcome=?3, conflicting_source=?4,
+                                conflicting_provenance=?5,
+                                conflicting_allotted_lots=?6,
+                                conflicting_allotted_shares=?7
+                             WHERE job_id=?1 AND account_id=?2
+                               AND EXISTS (
+                                   SELECT 1 FROM allotment_jobs
+                                   WHERE id=?1 AND cancel_requested=0 AND status <> 'CANCELLED'
+                               )",
+                             params![
+                                job_id,
+                                account_id,
+                                outcome,
+                                source,
+                                provenance,
+                                allotted_lots.map(|value| value as i64),
+                                allotted_shares.map(|value| value as i64),
+                            ],
+                        )?;
+                    } else if existing_state != "CONFLICT_REVIEW_REQUIRED" {
+                        self.connection.execute(
+                            "UPDATE allotment_resolved_facts SET
+                                fact_id=?3, source=?4,
+                                allotted_lots=COALESCE(?5, allotted_lots),
+                                allotted_shares=COALESCE(?6, allotted_shares),
+                                provider_reference=COALESCE(?7, provider_reference),
+                                provenance=?8, supersedes_attempt_id=?9,
+                                resolved_at=?10
+                             WHERE job_id=?1 AND account_id=?2
+                               AND EXISTS (
+                                   SELECT 1 FROM allotment_jobs
+                                   WHERE id=?1 AND cancel_requested=0 AND status <> 'CANCELLED'
+                               )",
+                             params![
+                                job_id,
+                                account_id,
+                                fact_id,
+                                source,
+                                allotted_lots.map(|value| value as i64),
+                                allotted_shares.map(|value| value as i64),
+                                provider_reference,
+                                provenance,
+                                supersedes_attempt_id,
+                                event.occurred_at(),
+                            ],
+                        )?;
+                    }
+                } else {
+                    self.connection.execute(
+                        "INSERT INTO allotment_resolved_facts(
+                            job_id, account_id, fact_id, outcome, source, allotted_lots,
+                            allotted_shares, provider_reference, provenance, supersedes_attempt_id,
+                            resolved_at, state
+                         ) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'RESOLVED'
+                           WHERE EXISTS (
+                               SELECT 1 FROM allotment_jobs
+                               WHERE id=?1 AND cancel_requested=0 AND status <> 'CANCELLED'
+                           )",
+                        params![
+                            job_id,
+                            account_id,
+                            fact_id,
+                            outcome,
+                            source,
+                            allotted_lots.map(|v| v as i64),
+                            allotted_shares.map(|v| v as i64),
+                            provider_reference,
+                            provenance,
+                            supersedes_attempt_id,
+                            event.occurred_at()
+                        ],
+                    )?;
+                }
             }
             sanket_domain::EventPayload::AllotmentProviderChallengeUpdated {
                 challenge_id,
@@ -877,13 +1405,113 @@ impl LocalIndex {
         Ok(())
     }
 
-    /// Rebuild the projection from scratch by replaying the given events.
+    /// Read current attempt rows that predate the event-backed projection.
+    /// Callers must migrate these rows to authoritative events before a
+    /// destructive rebuild; rebuild itself never copies rows from SQLite.
+    pub fn legacy_attempts(&self) -> Result<Vec<AllotmentAttemptState>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, job_id, account_id, status, attempt_count, allotted_lots,
+                    allotted_shares, provider_reference, safe_message, source,
+                    last_attempt_at, next_retry_at
+             FROM allotment_attempts ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AllotmentAttemptState {
+                id: row.get(0)?,
+                job_id: row.get(1)?,
+                account_id: row.get(2)?,
+                status: row.get(3)?,
+                attempt_count: row.get::<_, i64>(4)?.try_into().unwrap_or(0),
+                allotted_lots: row.get(5)?,
+                allotted_shares: row.get(6)?,
+                provider_reference: row.get(7)?,
+                safe_message: row.get(8)?,
+                source: row.get(9)?,
+                last_attempt_at: row.get(10)?,
+                next_retry_at: row.get(11)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(LocalIndexError::from)
+    }
+
+    /// Read provider-attempt history that has not necessarily been backed by
+    /// an event in older databases. The service migrates these rows once.
+    pub fn legacy_provider_attempts(
+        &self,
+    ) -> Result<Vec<ProviderAttemptHistoryState>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT event_id, attempt_id, job_id, account_id, status, attempt_count,
+                    allotted_lots, allotted_shares, provider_reference, safe_message,
+                    source, observed_at, next_retry_at
+             FROM allotment_provider_attempts ORDER BY observed_at, event_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ProviderAttemptHistoryState {
+                event_id: row.get(0)?,
+                attempt_id: row.get(1)?,
+                job_id: row.get(2)?,
+                account_id: row.get(3)?,
+                status: row.get(4)?,
+                attempt_count: row.get::<_, i64>(5)?.try_into().unwrap_or(0),
+                allotted_lots: row.get(6)?,
+                allotted_shares: row.get(7)?,
+                provider_reference: row.get(8)?,
+                safe_message: row.get(9)?,
+                source: row.get(10)?,
+                observed_at: row.get(11)?,
+                next_retry_at: row.get(12)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(LocalIndexError::from)
+    }
+
+    pub fn job_provider_id(&self, job_id: &str) -> Result<Option<String>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT provider_id FROM allotment_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
+    }
+
+    pub fn job_application_id(&self, job_id: &str) -> Result<Option<String>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT application_id FROM allotment_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
+    }
+
     pub fn rebuild(&self, events: &[EventEnvelope]) -> Result<(), LocalIndexError> {
-        self.connection.execute_batch(
-            "DELETE FROM projection_events;
+        self.rebuild_internal(events)
+    }
+
+    fn rebuild_internal(&self, events: &[EventEnvelope]) -> Result<(), LocalIndexError> {
+        // Verify the entire authority stream before opening a write transaction.
+        // A corrupt envelope must never erase or partly replace the live cache.
+        for event in events {
+            if !event.verify_integrity()? {
+                return Err(LocalIndexError::EventIntegrity(event.event_id().to_owned()));
+            }
+        }
+
+        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            self.connection.execute_batch(
+                "DELETE FROM projection_events;
              DELETE FROM estimated_profit_bases;
              DELETE FROM provider_health;
              DELETE FROM provider_issue_mappings;
+             DELETE FROM allotment_resolved_facts;
+             DELETE FROM allotment_provider_attempts;
+             DELETE FROM provider_challenges;
              DELETE FROM allotment_attempts;
              DELETE FROM allotment_jobs;
              DELETE FROM allocations;
@@ -893,11 +1521,56 @@ impl LocalIndex {
              DELETE FROM investment_sessions;
              DELETE FROM friend_accounts;
              DELETE FROM members;",
-        )?;
-        for event in events {
-            self.apply_event(event)?;
+            )?;
+            for event in events {
+                self.apply_event_unchecked(event)?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.connection.execute_batch("COMMIT").map_err(Into::into),
+            Err(error) => {
+                let _ = self.connection.execute_batch("ROLLBACK");
+                Err(error)
+            }
         }
-        Ok(())
+    }
+
+    /// Rebuild a production projection while excluding development fixture
+    /// allotment jobs. Fixture events remain immutable in the vault and are
+    /// still accepted by `rebuild` for synthetic test projections; they must
+    /// never contaminate a production live store.
+    pub fn rebuild_production(&self, events: &[EventEnvelope]) -> Result<(), LocalIndexError> {
+        let fixture_job_ids: HashSet<String> = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                sanket_domain::EventPayload::AllotmentJobCreated {
+                    job_id,
+                    provider_id,
+                    ..
+                } if provider_id == "kfintech-fixture" => Some(job_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let filtered = events
+            .iter()
+            .filter(|event| match event.payload() {
+                sanket_domain::EventPayload::AllotmentJobCreated { provider_id, .. }
+                | sanket_domain::EventPayload::AllotmentProviderDiscovered {
+                    provider_id, ..
+                } => provider_id != "kfintech-fixture",
+                sanket_domain::EventPayload::AllotmentJobStatusChanged { job_id, .. }
+                | sanket_domain::EventPayload::AllotmentAttemptRecorded { job_id, .. }
+                | sanket_domain::EventPayload::AllotmentAttemptStateUpdated { job_id, .. }
+                | sanket_domain::EventPayload::AllotmentResolutionFactRecorded { job_id, .. }
+                | sanket_domain::EventPayload::AllotmentProviderChallengeUpdated { job_id, .. } => {
+                    !fixture_job_ids.contains(job_id)
+                }
+                _ => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.rebuild_internal(&filtered)
     }
 
     pub fn list_sessions(&self) -> Result<Vec<(String, String, i64, String)>, LocalIndexError> {
@@ -1015,6 +1688,34 @@ impl LocalIndex {
         Ok(exists)
     }
 
+    pub fn provider_issue_mapping(
+        &self,
+        application_id: &str,
+        provider_id: &str,
+    ) -> Result<Option<ProviderIssueMappingState>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT application_id, provider_id, registrar_id, provider_issue_id,
+                        ipo_name, official_status_url, last_verified_at
+                 FROM provider_issue_mappings
+                 WHERE application_id=?1 AND provider_id=?2",
+                params![application_id, provider_id],
+                |row| {
+                    Ok(ProviderIssueMappingState {
+                        application_id: row.get(0)?,
+                        provider_id: row.get(1)?,
+                        registrar_id: row.get(2)?,
+                        provider_issue_id: row.get(3)?,
+                        ipo_name: row.get(4)?,
+                        official_status_url: row.get(5)?,
+                        last_verified_at: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
+    }
+
     pub fn list_account_ids_for_application(
         &self,
         application_id: &str,
@@ -1109,6 +1810,20 @@ impl LocalIndex {
         Ok(out)
     }
 
+    pub fn allotment_job_is_cancelled(&self, job_id: &str) -> Result<bool, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM allotment_jobs
+                    WHERE id=?1 AND (cancel_requested=1 OR status='CANCELLED')
+                )",
+                [job_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .map_err(LocalIndexError::from)
+    }
+
     pub fn allotment_attempt(
         &self,
         job_id: &str,
@@ -1143,6 +1858,80 @@ impl LocalIndex {
             .map_err(LocalIndexError::from)
     }
 
+    pub fn allotment_attempt_history(
+        &self,
+        job_id: &str,
+        account_id: &str,
+    ) -> Result<Vec<ProviderAttemptHistoryState>, LocalIndexError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT event_id, attempt_id, job_id, account_id, status, attempt_count,
+                    allotted_lots, allotted_shares, provider_reference, safe_message,
+                    source, observed_at, next_retry_at
+             FROM allotment_provider_attempts
+             WHERE job_id=?1 AND account_id=?2
+             ORDER BY observed_at, event_id",
+        )?;
+        let rows = stmt.query_map(params![job_id, account_id], |row| {
+            Ok(ProviderAttemptHistoryState {
+                event_id: row.get(0)?,
+                attempt_id: row.get(1)?,
+                job_id: row.get(2)?,
+                account_id: row.get(3)?,
+                status: row.get(4)?,
+                attempt_count: row.get::<_, i64>(5)? as u32,
+                allotted_lots: row.get(6)?,
+                allotted_shares: row.get(7)?,
+                provider_reference: row.get(8)?,
+                safe_message: row.get(9)?,
+                source: row.get(10)?,
+                observed_at: row.get(11)?,
+                next_retry_at: row.get(12)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(LocalIndexError::from)
+    }
+
+    pub fn resolved_allotment_fact(
+        &self,
+        job_id: &str,
+        account_id: &str,
+    ) -> Result<Option<ResolvedAllotmentFactState>, LocalIndexError> {
+        self.connection
+            .query_row(
+                "SELECT job_id, account_id, fact_id, outcome, source, allotted_lots,
+                        allotted_shares, provider_reference, provenance, supersedes_attempt_id,
+                        resolved_at, state, conflicting_outcome, conflicting_source,
+                        conflicting_provenance, conflicting_allotted_lots,
+                        conflicting_allotted_shares
+                 FROM allotment_resolved_facts WHERE job_id=?1 AND account_id=?2",
+                params![job_id, account_id],
+                |row| {
+                    Ok(ResolvedAllotmentFactState {
+                        job_id: row.get(0)?,
+                        account_id: row.get(1)?,
+                        fact_id: row.get(2)?,
+                        outcome: row.get(3)?,
+                        source: row.get(4)?,
+                        allotted_lots: row.get(5)?,
+                        allotted_shares: row.get(6)?,
+                        provider_reference: row.get(7)?,
+                        provenance: row.get(8)?,
+                        supersedes_attempt_id: row.get(9)?,
+                        resolved_at: row.get(10)?,
+                        state: row.get(11)?,
+                        conflicting_outcome: row.get(12)?,
+                        conflicting_source: row.get(13)?,
+                        conflicting_provenance: row.get(14)?,
+                        conflicting_allotted_lots: row.get(15)?,
+                        conflicting_allotted_shares: row.get(16)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(LocalIndexError::from)
+    }
+
     /// Atomically acquire a job lease. Expired leases are reclaimable after restart.
     pub fn try_acquire_allotment_lease(
         &self,
@@ -1157,7 +1946,7 @@ impl LocalIndex {
                 lease_owner_device_id=?2, lease_token=?3, lease_expires_at=?5,
                 status='RUNNING', updated_at=CAST(?4 AS TEXT)
              WHERE id=?1 AND cancel_requested=0
-               AND status IN ('CREATED','PREPARING_PROVIDER_SESSION','VERIFICATION_REQUIRED_REFRESH','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
+               AND status IN ('CREATED','PREPARING_PROVIDER_SESSION','VERIFICATION_REQUIRED_REFRESH','RUNNING','PARTIALLY_COMPLETE','RETRYABLE_PROVIDER_FAILURE','WAITING_FOR_PROVIDER_AVAILABILITY')
                AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?4)",
             params![
                 job_id,
@@ -1183,24 +1972,6 @@ impl LocalIndex {
         )? == 1)
     }
 
-    pub fn request_allotment_cancel(&self, job_id: &str) -> Result<bool, LocalIndexError> {
-        let tx = self.connection.unchecked_transaction()?;
-        let changed = tx.execute(
-            "UPDATE allotment_jobs SET cancel_requested=1, status='CANCELLED', updated_at=CURRENT_TIMESTAMP
-             WHERE id=?1 AND status NOT IN ('COMPLETE','CANCELLED')",
-            [job_id],
-        )?;
-        if changed == 1 {
-            tx.execute(
-                "UPDATE allotment_attempts SET status='CANCELLED', next_retry_at=NULL
-                 WHERE job_id=?1 AND status NOT IN ('ALLOTTED','NOT_ALLOTTED','NOT_FOUND','MANUAL_RESULT')",
-                [job_id],
-            )?;
-        }
-        tx.commit()?;
-        Ok(changed == 1)
-    }
-
     pub fn resumable_allotment_job_ids(
         &self,
         now_epoch_secs: u64,
@@ -1208,7 +1979,7 @@ impl LocalIndex {
         let mut stmt = self.connection.prepare(
             "SELECT id FROM allotment_jobs
              WHERE cancel_requested=0
-               AND status IN ('CREATED','PREPARING_PROVIDER_SESSION','VERIFICATION_REQUIRED_REFRESH','RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY')
+               AND status IN ('CREATED','PREPARING_PROVIDER_SESSION','VERIFICATION_REQUIRED_REFRESH','RUNNING','PARTIALLY_COMPLETE','RETRYABLE_PROVIDER_FAILURE','WAITING_FOR_PROVIDER_AVAILABILITY')
                AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?1)
              ORDER BY created_at, id",
         )?;
@@ -1225,7 +1996,7 @@ impl LocalIndex {
                 status='PREPARING_PROVIDER_SESSION',
                 lease_owner_device_id=NULL, lease_token=NULL, lease_expires_at=NULL,
                 updated_at=CURRENT_TIMESTAMP
-             WHERE status IN ('RUNNING','PARTIALLY_COMPLETE','WAITING_FOR_PROVIDER_AVAILABILITY',
+             WHERE status IN ('RUNNING','PARTIALLY_COMPLETE','RETRYABLE_PROVIDER_FAILURE','WAITING_FOR_PROVIDER_AVAILABILITY',
                               'PREPARING_PROVIDER_SESSION')
                AND NOT EXISTS (
                     SELECT 1 FROM provider_challenges c
@@ -1388,4 +2159,115 @@ fn restrict_database_permissions(path: &Path) -> Result<(), LocalIndexError> {
 #[cfg(not(unix))]
 fn restrict_database_permissions(_path: &Path) -> Result<(), LocalIndexError> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sanket_domain::{EventEnvelope, EventPayload, NewEvent};
+
+    #[test]
+    fn projection_failure_rolls_back_event_marker_and_job() {
+        let path = std::env::temp_dir().join(format!(
+            "sanket-local-index-rollback-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let event = EventEnvelope::seal(NewEvent {
+            event_id: "rollback-event".into(),
+            aggregate_type: "allotment_job".into(),
+            aggregate_id: "rollback-job".into(),
+            aggregate_revision: 1,
+            actor_member_id: "owner-1".into(),
+            device_id: "device-1".into(),
+            occurred_at: "2026-01-01T00:00:00Z".into(),
+            app_version: "0.1.0".into(),
+            previous_event_hash: None,
+            payload: EventPayload::AllotmentJobCreated {
+                job_id: "rollback-job".into(),
+                application_id: "app-1".into(),
+                session_id: "session-1".into(),
+                ipo_name: "Example IPO".into(),
+                registrar_id: "kfintech".into(),
+                registrar_name: "KFintech".into(),
+                official_status_url: None,
+                provider_id: "kfintech-live".into(),
+            },
+        })
+        .unwrap();
+        let index = LocalIndex::open(&path).unwrap();
+        index.fail_next_event_application();
+        assert!(index.apply_event(&event).is_err());
+        assert!(index
+            .projection_event_hash("rollback-event")
+            .unwrap()
+            .is_none());
+        assert!(index.list_allotment_jobs().unwrap().is_empty());
+        drop(index);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn failed_rebuild_preserves_the_previous_complete_projection() {
+        let path = std::env::temp_dir().join(format!(
+            "sanket-local-index-rebuild-rollback-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let index = LocalIndex::open(&path).unwrap();
+        let created = EventEnvelope::seal(NewEvent {
+            event_id: "rebuild-created".into(),
+            aggregate_type: "allotment_job".into(),
+            aggregate_id: "rebuild-job".into(),
+            aggregate_revision: 1,
+            actor_member_id: "owner-1".into(),
+            device_id: "device-1".into(),
+            occurred_at: "2026-01-01T00:00:00Z".into(),
+            app_version: "0.1.0".into(),
+            previous_event_hash: None,
+            payload: EventPayload::AllotmentJobCreated {
+                job_id: "rebuild-job".into(),
+                application_id: "app-1".into(),
+                session_id: "session-1".into(),
+                ipo_name: "Example IPO".into(),
+                registrar_id: "kfintech".into(),
+                registrar_name: "KFintech".into(),
+                official_status_url: None,
+                provider_id: "kfintech-live".into(),
+            },
+        })
+        .unwrap();
+        let running = EventEnvelope::seal(NewEvent {
+            event_id: "rebuild-running".into(),
+            aggregate_type: "allotment_job".into(),
+            aggregate_id: "rebuild-job".into(),
+            aggregate_revision: 2,
+            actor_member_id: "owner-1".into(),
+            device_id: "device-1".into(),
+            occurred_at: "2026-01-01T00:00:01Z".into(),
+            app_version: "0.1.0".into(),
+            previous_event_hash: None,
+            payload: EventPayload::AllotmentJobStatusChanged {
+                job_id: "rebuild-job".into(),
+                status: "RUNNING".into(),
+            },
+        })
+        .unwrap();
+        index.apply_event(&created).unwrap();
+        index.apply_event(&running).unwrap();
+        index.fail_next_event_application();
+
+        assert!(index.rebuild(&[created, running]).is_err());
+        assert_eq!(index.list_allotment_jobs().unwrap()[0].5, "RUNNING");
+        assert!(index
+            .projection_event_hash("rebuild-created")
+            .unwrap()
+            .is_some());
+        assert!(index
+            .projection_event_hash("rebuild-running")
+            .unwrap()
+            .is_some());
+        drop(index);
+        let _ = std::fs::remove_file(path);
+    }
 }

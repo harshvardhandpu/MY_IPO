@@ -19,7 +19,8 @@ mod status;
 pub use bigshare::{BigshareIssue, BigshareProvider};
 pub use job::{
     AllotmentCheckAttempt, AllotmentCheckJob, AllotmentJobError, AllotmentJobStatus,
-    AllotmentResultSource, AttemptStatus, ManualReportedOutcome, ManualResultInput,
+    AllotmentResolutionState, AllotmentResultSource, AttemptStatus, ManualReportedOutcome,
+    ManualResultInput,
 };
 pub use kfintech::{KfintechIssue, KfintechProvider};
 pub use kfintech_live::{DiscoveredIssue, LiveKfintechProvider};
@@ -28,10 +29,11 @@ pub use mufg_intime::{
 };
 pub use profit::{EstimatedProfit, ProfitPriceBasis};
 pub use provider::{
-    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, FixtureKfintechProvider,
+    AllotmentLookupContext, AllotmentProvider, BackgroundExecution, ConfirmedProviderIssue,
+    FixtureKfintechProvider,
     HumanVerificationChallenge, HumanVerificationRequirement, HumanVerificationStatus,
     HumanVerificationType, IssueDiscoveryMode, LookupKeyKind, NegativeResultProof,
-    NegativeResultProofError, ProviderAllotmentResult, ProviderCapabilities,
+    NegativeResultProofError, PositiveResultProof, ProviderAllotmentResult, ProviderCapabilities,
     ProviderContinuationReference, ProviderError, ProviderHealth, ProviderResultProvenance,
     ProviderTransportKind, RealInvestorLookupPermit, RegistrarIssue, SafeProviderMetadataError,
     SanitizedFixtureProvenance, SessionRequirement,
