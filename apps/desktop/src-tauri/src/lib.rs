@@ -55,6 +55,7 @@ pub struct AppState {
     provider_credentials: OsProviderCredentialStore,
     pub(crate) upstox: upstox::UpstoxService,
     auth_service: Option<Arc<AuthService>>,
+    auth_initialization_error: Option<String>,
     active_session_token: Arc<Mutex<Option<String>>>,
 }
 
@@ -84,12 +85,18 @@ impl AppState {
         vault_root: PathBuf,
         index_path: PathBuf,
     ) -> Self {
-        let auth_service = if vault_root.as_os_str().is_empty() {
-            None
+        let (auth_service, auth_initialization_error) = if vault_root.as_os_str().is_empty() {
+            (None, None)
         } else {
-            sanket_member_vault::MemberVault::open(&vault_root)
-                .ok()
-                .map(|vault| Arc::new(AuthService::new(vault, device_id.clone())))
+            match service::open_verified_member_vault(
+                &device_id,
+                vault_root.clone(),
+                &index_path,
+                service::resolve_security_mode(),
+            ) {
+                Ok(vault) => (Some(Arc::new(AuthService::new(vault, device_id.clone()))), None),
+                Err(error) => (None, Some(format!("authentication unavailable: {error}"))),
+            }
         };
         Self {
             app_version: env!("CARGO_PKG_VERSION"),
@@ -101,6 +108,7 @@ impl AppState {
             provider_credentials: OsProviderCredentialStore,
             upstox: upstox::UpstoxService::new(PathBuf::new()),
             auth_service,
+            auth_initialization_error,
             active_session_token: Arc::new(Mutex::new(None)),
         }
     }
@@ -135,6 +143,9 @@ impl AppState {
     }
 
     fn auth_service(&self) -> Result<&Arc<AuthService>, String> {
+        if let Some(error) = self.auth_initialization_error.as_deref() {
+            return Err(error.to_owned());
+        }
         self.auth_service
             .as_ref()
             .ok_or_else(|| AUTHENTICATION_ERROR.into())
@@ -192,15 +203,20 @@ pub struct AuthStatus {
     pub authenticated: bool,
     pub account_id: Option<String>,
     pub role: Option<sanket_domain::Role>,
+    /// Stable, non-secret reason when startup could not establish the
+    /// authenticated vault boundary. This is distinct from an ordinary signed
+    /// out state, which is ready and has no initialization error.
+    pub initialization_error: Option<&'static str>,
 }
 
 impl AuthStatus {
-    fn unavailable() -> Self {
+    fn unavailable(initialization_error: Option<&'static str>) -> Self {
         Self {
             ready: false,
             authenticated: false,
             account_id: None,
             role: None,
+            initialization_error,
         }
     }
 
@@ -210,6 +226,7 @@ impl AuthStatus {
             authenticated: false,
             account_id: None,
             role: None,
+            initialization_error: None,
         }
     }
 
@@ -219,6 +236,7 @@ impl AuthStatus {
             authenticated: true,
             account_id: Some(account_id),
             role: Some(role),
+            initialization_error: None,
         }
     }
 }
@@ -244,10 +262,15 @@ fn login_with_state(state: &AppState, request: LoginRequest) -> Result<LoginResp
 
 fn auth_status_for_state(state: &AppState) -> AuthStatus {
     let Some(auth) = state.auth_service.as_ref() else {
-        return AuthStatus::unavailable();
+        return AuthStatus::unavailable(
+            state
+                .auth_initialization_error
+                .as_ref()
+                .map(|_| "AUTH_STARTUP_INTEGRITY_BLOCKED"),
+        );
     };
     let Ok(token) = state.active_session() else {
-        return AuthStatus::unavailable();
+        return AuthStatus::unavailable(Some("AUTH_SESSION_STATE_UNAVAILABLE"));
     };
     let Some(mut token) = token else {
         return AuthStatus::ready_unauthenticated();
@@ -886,6 +909,16 @@ mod native_auth_command_tests {
             security_status_label(sanket_identity_security::RuntimeSecurityMode::ProductionSecure),
             "OS KEYRING (PRODUCTION_SECURE)"
         );
+    }
+
+    #[test]
+    fn unavailable_auth_state_exposes_integrity_startup_blocker() {
+        let mut state = AppState::new("device-status-only".into(), 1);
+        state.auth_initialization_error = Some("authentication unavailable: anchor verification failed".into());
+        let status = auth_status_for_state(&state);
+        assert!(!status.ready);
+        assert!(!status.authenticated);
+        assert_eq!(status.initialization_error, Some("AUTH_STARTUP_INTEGRITY_BLOCKED"));
     }
 
     #[test]

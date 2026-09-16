@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 libc.workspace = true
 hmac.workspace = true
+keyring.workspace = true
 sanket-domain = { path = "../domain" }
 sanket-identity-security = { path = "../identity-security" }
 serde.workspace = true

@@ -3387,6 +3387,7 @@ name = "sanket-member-vault"
 version = "0.1.1"
 dependencies = [
  "hmac",
+ "keyring",
  "libc",
  "sanket-domain",
  "sanket-identity-security",

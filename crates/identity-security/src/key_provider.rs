@@ -320,4 +320,32 @@ mod tests {
             assert!(matches!(err, KeyProviderError::NoDurableBackend));
         }
     }
+
+    #[test]
+    fn os_keyring_adapter_lifecycle_uses_isolated_non_secret_values() {
+        if std::env::var_os("SANKET_RUN_ISOLATED_KEYRING_TEST").is_none() {
+            return;
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let service = format!("sanket-ipo-isolated-test-{}-{nonce}", std::process::id());
+        let key_id = "isolated-event-stream-key";
+        let provider = OsKeyringKeyProvider::with_service(service);
+        let expected = IdentityKey::from_bytes(&[0xA5; 32]);
+
+        provider
+            .store_key(key_id, &expected)
+            .expect("isolated OS keyring write");
+        let loaded = provider.key(key_id).expect("isolated OS keyring read");
+        assert_eq!(loaded.as_bytes(), expected.as_bytes());
+        provider
+            .delete_key(key_id)
+            .expect("isolated OS keyring delete");
+        assert!(matches!(
+            provider.key(key_id),
+            Err(KeyProviderError::MissingKey(_))
+        ));
+    }
 }

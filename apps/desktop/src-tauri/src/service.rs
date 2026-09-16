@@ -3,7 +3,7 @@
 //! only through explicit command arguments and is encrypted immediately.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 #[cfg(test)]
 use std::sync::{atomic::AtomicBool, Arc, Barrier};
@@ -16,19 +16,95 @@ use sanket_domain::{
     Money, NewEvent, Role,
 };
 use sanket_identity_security::{
-    IdentityKey, InMemoryKeyProvider, OsKeyringKeyProvider, Pan, RuntimeSecurityMode,
-    assert_mode_allows_provider,
+    assert_mode_allows_provider, IdentityKey, InMemoryKeyProvider, KeyProvider,
+    OsKeyringKeyProvider, Pan, RuntimeSecurityMode,
 };
 #[cfg(test)]
-use sanket_identity_security::{KeyProvider, KeyProviderClass, KeyProviderError};
+use sanket_identity_security::{KeyProviderClass, KeyProviderError};
 use sanket_intelligence_vault::{InvestmentDecisionRequest, PlannedIpo};
 use sanket_local_index::LocalIndex;
-use sanket_member_vault::{EventAppendLock, MemberVault};
+use sanket_member_vault::{EventAppendLock, FileEventStreamAnchorStore, MemberVault};
+#[cfg(not(test))]
+use sanket_member_vault::{EventStreamAnchorStore, KeyringEventStreamAnchorStore};
 use sanket_ranking::{DevRankingAlgorithm, RankingAlgorithm};
 
 pub const DEV_KEY_ID: &str = "dev-key-1";
 pub const PRODUCTION_KEY_ID: &str = "os-keyring:v1:identity-key-v1";
+pub const PRODUCTION_EVENT_STREAM_KEY_ID: &str = "os-keyring:v1:event-stream-integrity-key-v1";
 pub const LOOKUP_AUTHORIZATION_LIFETIME_SECS: u64 = 300;
+
+/// Open the only vault handle that production application code may use. The
+/// HMAC key and the detached anchor are both outside the mutable event root;
+/// a non-empty vault without its enrolled anchor fails closed.
+pub(crate) fn open_verified_member_vault(
+    device_id: &str,
+    vault_root: PathBuf,
+    index_path: &Path,
+    security_mode: RuntimeSecurityMode,
+) -> Result<MemberVault> {
+    std::fs::create_dir_all(&vault_root).map_err(sanket_member_vault::MemberVaultError::Io)?;
+    let root_was_uninitialized = MemberVault::open(&vault_root)?.is_uninitialized()?;
+    let (key, store): (IdentityKey, std::sync::Arc<dyn sanket_member_vault::EventStreamAnchorStore>) =
+        match security_mode {
+            RuntimeSecurityMode::DevelopmentSynthetic => {
+                let digest = Sha256::digest(vault_root
+                    .canonicalize()
+                    .map_err(sanket_member_vault::MemberVaultError::Io)?
+                    .to_string_lossy()
+                    .as_bytes());
+                let parent = index_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let path = parent.join(format!(".sanket-event-stream-anchor-v1-{digest:x}.json"));
+                (dev_key(device_id), std::sync::Arc::new(FileEventStreamAnchorStore::new(path)))
+            }
+            RuntimeSecurityMode::ProductionSecure => {
+                #[cfg(test)]
+                {
+                    // Unit tests must not read or write the operator's keyring. The
+                    // non-test production branch below is the only shipped path.
+                    let digest = Sha256::digest(vault_root
+                    .canonicalize()
+                    .map_err(sanket_member_vault::MemberVaultError::Io)?
+                    .to_string_lossy()
+                    .as_bytes());
+                    let parent = index_path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."));
+                    let path = parent.join(format!(".test-event-stream-anchor-v1-{digest:x}.json"));
+                    (
+                        IdentityKey::from_bytes(&[8u8; 32]),
+                        std::sync::Arc::new(FileEventStreamAnchorStore::new(path)),
+                    )
+                }
+                #[cfg(not(test))]
+                {
+                    let os = OsKeyringKeyProvider::new();
+                    assert_mode_allows_provider(security_mode, &os)
+                        .map_err(|error| ServiceError::KeyProvider(error.to_string()))?;
+                    let store = KeyringEventStreamAnchorStore::for_vault(&vault_root)?;
+                    let anchor_exists = store
+                        .load()
+                        .map_err(sanket_member_vault::MemberVaultError::EventStreamAnchorInvalid)?
+                        .is_some();
+                    let key = if root_was_uninitialized && !anchor_exists {
+                        os.ensure_key(PRODUCTION_EVENT_STREAM_KEY_ID)
+                    } else {
+                        os.key(PRODUCTION_EVENT_STREAM_KEY_ID)
+                    }
+                    .map_err(|error| ServiceError::KeyProvider(error.to_string()))?;
+                    (key, std::sync::Arc::new(store))
+                }
+            }
+        };
+    let vault = MemberVault::open_with_event_stream_anchor(vault_root, key, store)?;
+    if root_was_uninitialized {
+        match vault.enroll_event_stream_anchor() {
+            Ok(()) | Err(sanket_member_vault::MemberVaultError::EventStreamAnchorAlreadyEnrolled) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    vault.verified_open()?;
+    Ok(vault)
+}
 
 fn allotment_rate_limiter() -> &'static sanket_allotment::ProviderRateLimiter {
     static LIMITER: OnceLock<sanket_allotment::ProviderRateLimiter> = OnceLock::new();
@@ -538,7 +614,7 @@ impl Application {
         index_path: PathBuf,
         security_mode: RuntimeSecurityMode,
     ) -> Result<Self> {
-        let vault = MemberVault::open(vault_root)?;
+        let vault = open_verified_member_vault(&device_id, vault_root, &index_path, security_mode)?;
         let index = LocalIndex::open(&index_path)?;
         let app = Self {
             device_id,
@@ -1147,8 +1223,7 @@ impl Application {
 
         // Persist + project.
         for event in &events {
-            self.vault.append_event(event)?;
-            self.index.apply_event(event)?;
+            self.append_and_project(event)?;
         }
 
         let allocation_count = req.ipos.iter().map(|i| i.account_ids.len()).sum::<usize>();
@@ -1334,8 +1409,7 @@ impl Application {
             })?,
         ];
         for event in &events {
-            self.vault.append_event(event)?;
-            self.index.apply_event(event)?;
+            self.append_and_project(event)?;
         }
 
         Ok(HistoricalApplicationResponse {
@@ -2885,6 +2959,14 @@ impl Application {
         provider_id: &str,
     ) -> Result<LookupAuthorizationState> {
         let events = self.vault.list_events()?;
+        Self::lookup_authorization_state_from_events(&events, application_id, provider_id)
+    }
+
+    fn lookup_authorization_state_from_events(
+        events: &[EventEnvelope],
+        application_id: &str,
+        provider_id: &str,
+    ) -> Result<LookupAuthorizationState> {
         let owner_ids: Vec<&str> = events
             .iter()
             .filter_map(|event| match event.payload() {
@@ -2896,7 +2978,7 @@ impl Application {
             .collect();
         let mut grants = Vec::new();
         let mut consumptions = Vec::new();
-        for event in &events {
+        for event in events {
             match event.payload() {
                 EventPayload::LookupAuthorizationGranted {
                     authorization_id,
@@ -3125,8 +3207,12 @@ impl Application {
             .lock()
             .map_err(|_| ServiceError::Invalid("allotment event lock poisoned".into()))?;
         let vault_lock = self.vault.acquire_event_append_lock()?;
-        let state =
-            self.lookup_authorization_state(permit.application_id(), permit.provider_id())?;
+        let events = self.vault.list_events_under_lock(&vault_lock)?;
+        let state = Self::lookup_authorization_state_from_events(
+            &events,
+            permit.application_id(),
+            permit.provider_id(),
+        )?;
         let record = state.record.ok_or_else(|| {
             ServiceError::Invalid("real investor lookup authorization is not granted".into())
         })?;
@@ -3241,7 +3327,12 @@ impl Application {
             .lock()
             .map_err(|_| ServiceError::Invalid("allotment event lock poisoned".into()))?;
         let vault_lock = self.vault.acquire_event_append_lock()?;
-        let state = self.lookup_authorization_state(&req.application_id, &provider_id)?;
+        let events = self.vault.list_events_under_lock(&vault_lock)?;
+        let state = Self::lookup_authorization_state_from_events(
+            &events,
+            &req.application_id,
+            &provider_id,
+        )?;
         if state.status == "ACTIVE" {
             return Err(ServiceError::Invalid(
                 "a lookup authorization is already active".into(),
@@ -3869,10 +3960,37 @@ mod lookup_authorization_tests {
     }
 
     #[test]
+    fn historical_application_append_failure_leaves_projection_unchanged() {
+        let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
+        seed_test_owner(&app);
+        let events_dir = app.vault.root().join("_events");
+        let events_backup = root.join("_events-test-backup");
+        std::fs::rename(&events_dir, &events_backup).expect("move event directory");
+        std::fs::write(&events_dir, b"not a directory").expect("block event append");
+
+        let result = app.record_historical_application(HistoricalApplicationRequest {
+            actor_member_id: "owner-for-member-flow".into(),
+            account_id: "owner-for-member-flow".into(),
+            ipo_name: "Symbiotec Pharmalab Limited".into(),
+            amount_paise: 1_482_000,
+            application_date: None,
+            registrar_id: "mufg-intime".into(),
+            provider_issue_id: "11926".into(),
+            owner_affirmed: true,
+        });
+
+        assert!(result.is_err(), "historical event append must fail");
+        assert!(app.index.list_sessions().expect("sessions").is_empty());
+        assert!(app.index.list_allotment_jobs().expect("jobs").is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
     fn onboarding_append_failure_leaves_sqlite_projection_unchanged() {
         let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
-        std::fs::write(app.vault.root().join("_events"), b"not a directory")
-            .expect("block event append");
+        let events_dir = app.vault.root().join("_events");
+        let events_backup = root.join("_events-test-backup");
+        std::fs::rename(&events_dir, &events_backup).expect("move event directory");
+        std::fs::write(&events_dir, b"not a directory").expect("block event append");
 
         assert!(app
             .onboard_member(OnboardMemberRequest {
@@ -3976,11 +4094,73 @@ mod lookup_authorization_tests {
     }
 
     #[test]
+    fn startup_rejects_a_recomputed_self_hash_before_projection_rebuild() {
+        let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
+        let authentic = EventEnvelope::seal(NewEvent {
+            event_id: "anchor-startup-event".into(),
+            aggregate_type: "member".into(),
+            aggregate_id: "anchor-member".into(),
+            aggregate_revision: 1,
+            actor_member_id: "anchor-member".into(),
+            device_id: "test-device".into(),
+            occurred_at: "0".into(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::MemberCreated {
+                member_id: "anchor-member".into(),
+                display_name: "Anchor Owner".into(),
+                role: Role::Owner,
+            },
+        })
+        .expect("authentic event");
+        app.vault.append_event(&authentic).expect("anchored append");
+        drop(app);
+
+        let forged = EventEnvelope::seal(NewEvent {
+            event_id: "anchor-startup-event".into(),
+            aggregate_type: "member".into(),
+            aggregate_id: "anchor-member".into(),
+            aggregate_revision: 2,
+            actor_member_id: "anchor-member".into(),
+            device_id: "test-device".into(),
+            occurred_at: "0".into(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            previous_event_hash: None,
+            payload: EventPayload::MemberCreated {
+                member_id: "anchor-member".into(),
+                display_name: "Forged Owner".into(),
+                role: Role::Owner,
+            },
+        })
+        .expect("forged self-hash");
+        std::fs::write(
+            root.join("vault/_events/anchor-startup-event.json"),
+            serde_json::to_vec(&forged).expect("forged JSON"),
+        )
+        .expect("replace vault event");
+
+        assert!(Application::with_mode(
+            "test-device".into(),
+            root.join("vault"),
+            root.join("index.sqlite"),
+            RuntimeSecurityMode::DevelopmentSynthetic,
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn startup_rebuild_failure_keeps_the_last_complete_projection() {
         let (app, root) = test_app(RuntimeSecurityMode::DevelopmentSynthetic);
         seed_test_owner(&app);
         drop(app);
-        let vault = MemberVault::open(root.join("vault")).expect("vault");
+        let vault = open_verified_member_vault(
+            "test-device",
+            root.join("vault"),
+            &root.join("index.sqlite"),
+            RuntimeSecurityMode::DevelopmentSynthetic,
+        )
+        .expect("vault");
         let invalid_replay = EventEnvelope::seal(NewEvent {
             event_id: "invalid-replay-event".into(),
             aggregate_type: "friend_account".into(),

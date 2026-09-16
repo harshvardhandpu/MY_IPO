@@ -1,5 +1,8 @@
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -384,6 +387,25 @@ impl EventStreamAnchorStore for MemoryAnchor {
     }
 }
 
+struct FailingAnchor {
+    value: Mutex<Option<Vec<u8>>>,
+    fail_next_store: AtomicBool,
+}
+
+impl EventStreamAnchorStore for FailingAnchor {
+    fn load(&self) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.value.lock().expect("anchor lock").clone())
+    }
+
+    fn store(&self, value: &[u8]) -> Result<(), String> {
+        if self.fail_next_store.swap(false, Ordering::SeqCst) {
+            return Err("simulated anchor persistence interruption".to_owned());
+        }
+        *self.value.lock().expect("anchor lock") = Some(value.to_vec());
+        Ok(())
+    }
+}
+
 fn member_created_event(event_id: &str, revision: u64) -> EventEnvelope {
     EventEnvelope::seal(NewEvent {
         event_id: event_id.into(),
@@ -402,6 +424,106 @@ fn member_created_event(event_id: &str, revision: u64) -> EventEnvelope {
         },
     })
     .expect("seal")
+}
+
+#[test]
+fn verified_open_rejects_a_missing_anchor_for_nonempty_history() {
+    let root = temp_root("anchored-missing-anchor");
+    let anchor = Arc::new(MemoryAnchor::default());
+    let anchor_store: Arc<dyn EventStreamAnchorStore> = anchor.clone();
+    let vault = MemberVault::open_with_event_stream_anchor(
+        &root,
+        IdentityKey::from_bytes(&[9u8; 32]),
+        anchor_store,
+    )
+    .expect("open anchored vault");
+    vault.enroll_event_stream_anchor().expect("enroll");
+    vault
+        .append_event(&member_created_event("anchored-event", 1))
+        .expect("append");
+    *anchor.value.lock().expect("anchor lock") = None;
+
+    let reopened = MemberVault::open_with_event_stream_anchor(
+        &root,
+        IdentityKey::from_bytes(&[9u8; 32]),
+        anchor,
+    )
+    .expect("construct vault handle");
+    assert!(
+        reopened.verified_open().is_err(),
+        "a usable verified handle must not be returned for a missing anchor"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn legacy_history_requires_explicit_owner_confirmed_enrollment() {
+    let root = temp_root("legacy-anchor-enrollment");
+    let legacy = MemberVault::open(&root).expect("open legacy vault");
+    legacy
+        .append_event(&member_created_event("legacy-event", 1))
+        .expect("legacy event");
+
+    let anchor = Arc::new(MemoryAnchor::default());
+    let anchored = MemberVault::open_with_event_stream_anchor(
+        &root,
+        IdentityKey::from_bytes(&[9u8; 32]),
+        anchor,
+    )
+    .expect("open anchored handle");
+    assert!(matches!(
+        anchored.enroll_event_stream_anchor(),
+        Err(MemberVaultError::EventStreamRecoveryRequired)
+    ));
+    assert!(matches!(
+        anchored.enroll_legacy_event_stream_anchor_after_owner_confirmation(false),
+        Err(MemberVaultError::EventStreamRecoveryRequired)
+    ));
+    anchored
+        .enroll_legacy_event_stream_anchor_after_owner_confirmation(true)
+        .expect("explicit legacy enrollment");
+    anchored.verified_open().expect("verified after enrollment");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn interrupted_anchor_update_fails_closed_until_owner_confirmed_recovery() {
+    let root = temp_root("anchor-recovery");
+    let anchor = Arc::new(FailingAnchor {
+        value: Mutex::new(None),
+        fail_next_store: AtomicBool::new(false),
+    });
+    let vault = MemberVault::open_with_event_stream_anchor(
+        &root,
+        IdentityKey::from_bytes(&[9u8; 32]),
+        anchor.clone(),
+    )
+    .expect("open anchored vault");
+    vault.enroll_event_stream_anchor().expect("enroll");
+    anchor.fail_next_store.store(true, Ordering::SeqCst);
+    assert!(vault
+        .append_event(&member_created_event("pending-event", 1))
+        .is_err());
+
+    let reopened = MemberVault::open_with_event_stream_anchor(
+        &root,
+        IdentityKey::from_bytes(&[9u8; 32]),
+        anchor,
+    )
+    .expect("reopen anchored vault");
+    assert!(matches!(
+        reopened.verified_open(),
+        Err(MemberVaultError::EventStreamRecoveryRequired)
+    ));
+    assert!(matches!(
+        reopened.recover_pending_event_append_after_owner_confirmation(false),
+        Err(MemberVaultError::EventStreamRecoveryRequired)
+    ));
+    reopened
+        .recover_pending_event_append_after_owner_confirmation(true)
+        .expect("owner-confirmed recovery");
+    assert_eq!(reopened.list_events().expect("events").len(), 1);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

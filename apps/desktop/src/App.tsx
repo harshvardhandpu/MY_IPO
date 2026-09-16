@@ -167,6 +167,7 @@ interface AuthStatus {
   authenticated: boolean;
   accountId?: string | null;
   role?: string | null;
+  initializationError?: string | null;
 }
 
 interface LoginResponse {
@@ -1016,7 +1017,9 @@ function AuthGate({
 
         {!status.ready && !error && (
           <p className="inline-error auth-error" role="alert">
-            Authentication is unavailable. Try again.
+            {status.initializationError === "AUTH_STARTUP_INTEGRITY_BLOCKED"
+              ? "Vault integrity verification blocked startup. No protected data was opened."
+              : "Authentication is unavailable. Try again."}
           </p>
         )}
 
