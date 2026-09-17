@@ -4,6 +4,7 @@
   "private": true,
   "workspaces": [
     "apps/desktop",
+    "apps/aether-desk",
     "packages/*"
   ],
   "engines": {
@@ -12,6 +13,8 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @sanket/desktop",
+    "dev:aether-desk": "npm run dev --workspace @sanket/aether-desk",
+    "typecheck:aether-desk": "npm run typecheck --workspace @sanket/aether-desk",
     "dev:hoplite": "npm run dev:hoplite --workspace @sanket/desktop",
     "build": "npm run build --workspace @sanket/desktop",
     "test": "npm run test --workspace @sanket/desktop && python -m unittest discover -s tests -v",

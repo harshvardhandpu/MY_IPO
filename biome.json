@@ -7,6 +7,7 @@
       "!!**/target/**",
       "!!**/dist/**",
       "!!apps/desktop/src-tauri/gen/**",
+      "!!apps/aether-desk/src/routeTree.gen.ts",
       "!!docs/planning/SANKET_IPO_MASTER_SOURCE*.md"
     ]
   },
