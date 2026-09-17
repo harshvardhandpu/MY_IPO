@@ -1,0 +1,139 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #9aa394;
+  --color-bg: #101010;
+  --color-window: #111111;
+  --color-surface: #1c1c1c;
+  --color-raised: #262626;
+  --color-fg: #f4f4f2;
+  --color-muted: #8f8f8f;
+  --color-subtle: #6b6b6b;
+  --color-line: #2c2c2c;
+  --color-accent: #ff4d1f;
+  --color-accent-fg: #fff6f3;
+  --color-gain: #6eeb6a;
+  --color-loss: #ff6b5b;
+  --color-warn: #e8c36a;
+  --color-heat: #d4de4a;
+  --color-chip: #ff8a7a;
+  --color-fund: #7a7dff;
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --radius-window: 36px;
+  --shadow-window: 0 28px 80px -24px rgb(16 16 16 / 0.55);
+}
+
+@layer base {
+  html,
+  body,
+  #app,
+  #root {
+    width: 100%;
+    min-width: 100%;
+    height: 100%;
+    min-height: 100vh;
+    margin: 0;
+    padding: 0;
+    background: var(--color-window);
+    color: var(--color-fg);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  * {
+    border-color: var(--color-line);
+  }
+}
+
+@layer components {
+  .desk {
+    display: grid;
+    gap: 1rem;
+  }
+
+  @media (min-width: 1100px) {
+    .desk {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+      grid-template-areas:
+        "sent perf port"
+        "prot heat port"
+        "quic pick acti";
+    }
+    .area-sent {
+      grid-area: sent;
+    }
+    .area-perf {
+      grid-area: perf;
+    }
+    .area-port {
+      grid-area: port;
+    }
+    .area-prot {
+      grid-area: prot;
+    }
+    .area-heat {
+      grid-area: heat;
+    }
+    .area-quic {
+      grid-area: quic;
+    }
+    .area-pick {
+      grid-area: pick;
+    }
+    .area-acti {
+      grid-area: acti;
+    }
+  }
+
+  .heat-0 {
+    background: var(--color-raised);
+  }
+  .heat-1 {
+    background: color-mix(in oklab, var(--color-heat) 30%, var(--color-raised));
+  }
+  .heat-2 {
+    background: color-mix(in oklab, var(--color-heat) 52%, var(--color-raised));
+  }
+  .heat-3 {
+    background: color-mix(in oklab, var(--color-heat) 74%, var(--color-raised));
+  }
+  .heat-4 {
+    background: var(--color-heat);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
